@@ -11,27 +11,7 @@ before:
     - go-winres make --in web/backend/winres/winres.json --out web/backend/rsrc --product-version={{ .Version }} --file-version={{ .Version }}
 
 builds:
-  - id: picoclaw
-    env:
-      - CGO_ENABLED=0
-    tags:
-      - stdjson
-    ldflags:
-      - -s -w
-      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
-    goos:
-      - linux
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    main: ./cmd/picoclaw
-
-  - id: picoclaw-whatsapp
-    binary: picoclaw-whatsapp
+  - id: picoclaw-linux-amd64
     env:
       - CGO_ENABLED=1
       - CC=x86_64-linux-gnu-gcc
@@ -50,8 +30,7 @@ builds:
       - amd64
     main: ./cmd/picoclaw
 
-  - id: picoclaw-whatsapp-arm64
-    binary: picoclaw-whatsapp
+  - id: picoclaw-linux-arm64
     env:
       - CGO_ENABLED=1
       - CC=aarch64-linux-gnu-gcc
@@ -67,6 +46,24 @@ builds:
     goos:
       - linux
     goarch:
+      - arm64
+    main: ./cmd/picoclaw
+
+  - id: picoclaw-windows
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - stdjson
+    ldflags:
+      - -s -w
+      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
+    goos:
+      - windows
+    goarch:
+      - amd64
       - arm64
     main: ./cmd/picoclaw
 
@@ -105,7 +102,9 @@ builds:
 archives:
   - id: default
     builds:
-      - picoclaw
+      - picoclaw-linux-amd64
+      - picoclaw-linux-arm64
+      - picoclaw-windows
       - picoclaw-launcher
       - picoclaw-launcher-tui
     formats: [tar.gz]
@@ -119,19 +118,6 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-
-  - id: whatsapp
-    builds:
-      - picoclaw-whatsapp
-      - picoclaw-whatsapp-arm64
-    formats: [tar.gz]
-    name_template: >-
-      {{ .ProjectName }}-whatsapp_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
 
 changelog:
   sort: asc
