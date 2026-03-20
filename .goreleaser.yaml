@@ -25,32 +25,10 @@ builds:
     goos:
       - linux
       - windows
-      - darwin
-      - freebsd
-      - netbsd
     goarch:
       - amd64
       - arm64
-      - riscv64
-      - loong64
-      - arm
-      - s390x
-      - mipsle
-    goarm:
-      - "6"
-      - "7"
-    gomips:
-      - softfloat
     main: ./cmd/picoclaw
-    ignore:
-      - goos: windows
-        goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
 
   - id: picoclaw-whatsapp
     binary: picoclaw-whatsapp
@@ -103,32 +81,10 @@ builds:
     goos:
       - linux
       - windows
-      - darwin
-      - freebsd
-      - netbsd
     goarch:
       - amd64
       - arm64
-      - riscv64
-      - loong64
-      - arm
-      - s390x
-      - mipsle
-    goarm:
-      - "6"
-      - "7"
-    gomips:
-      - softfloat
     main: ./web/backend
-    ignore:
-      - goos: windows
-        goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
 
   - id: picoclaw-launcher-tui
     binary: picoclaw-launcher-tui
@@ -141,32 +97,10 @@ builds:
     goos:
       - linux
       - windows
-      - darwin
-      - freebsd
-      - netbsd
     goarch:
       - amd64
       - arm64
-      - riscv64
-      - loong64
-      - arm
-      - s390x
-      - mipsle
-    goarm:
-      - "6"
-      - "7"
-    gomips:
-      - softfloat
     main: ./cmd/picoclaw-launcher-tui
-    ignore:
-      - goos: windows
-        goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
 
 dockers_v2:
   - id: picoclaw
@@ -221,8 +155,12 @@ notarize:
         timeout: 20m
 
 archives:
-  - formats: [tar.gz]
-    # this name template makes the OS and Arch compatible with the results of `uname`.
+  - id: default
+    builds:
+      - picoclaw
+      - picoclaw-launcher
+      - picoclaw-launcher-tui
+    formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -230,7 +168,6 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
     format_overrides:
       - goos: windows
         formats: [zip]
@@ -269,11 +206,6 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
-
-# upx:
-#    - enabled: true
-#      compress: best
-#      lzma: true
 
 release:
   disable: '{{ isEnvSet "NIGHTLY_BUILD" }}'
