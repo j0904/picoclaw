@@ -47,7 +47,7 @@ jobs:
 
       - name: Install cross compilers
         run: |
-          apt-get update && apt-get install -y \
+          sudo apt-get update && sudo apt-get install -y \
             gcc-arm-linux-gnueabihf \
             gcc-aarch64-linux-gnu \
             gcc-loongarch64-linux-gnu \
