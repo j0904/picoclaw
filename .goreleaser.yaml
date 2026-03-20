@@ -53,6 +53,7 @@ builds:
         goarch: arm
 
   - id: picoclaw-whatsapp
+    binary: picoclaw-whatsapp
     env:
       - CGO_ENABLED=1
       - CC=x86_64-linux-gnu-gcc
