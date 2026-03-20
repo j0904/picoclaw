@@ -49,11 +49,13 @@ builds:
       - arm64
     main: ./cmd/picoclaw
 
-  - id: picoclaw-windows
+  - id: picoclaw-windows-amd64
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
+      - CC=x86_64-w64-mingw32-gcc
     tags:
       - stdjson
+      - whatsapp_native
     ldflags:
       - -s -w
       - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
@@ -64,6 +66,24 @@ builds:
       - windows
     goarch:
       - amd64
+    main: ./cmd/picoclaw
+
+  - id: picoclaw-windows-arm64
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    tags:
+      - stdjson
+      - whatsapp_native
+    ldflags:
+      - -s -w
+      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
+    goos:
+      - windows
+    goarch:
       - arm64
     main: ./cmd/picoclaw
 
@@ -104,7 +124,8 @@ archives:
     builds:
       - picoclaw-linux-amd64
       - picoclaw-linux-arm64
-      - picoclaw-windows
+      - picoclaw-windows-amd64
+      - picoclaw-windows-arm64
       - picoclaw-launcher
       - picoclaw-launcher-tui
     formats: [tar.gz]
