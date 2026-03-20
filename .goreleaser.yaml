@@ -16,7 +16,6 @@ builds:
       - CGO_ENABLED=0
     tags:
       - stdjson
-      - whatsapp_native
     ldflags:
       - -s -w
       - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
