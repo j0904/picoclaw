@@ -50,8 +50,6 @@ jobs:
           sudo apt-get update && sudo apt-get install -y \
             gcc-arm-linux-gnueabihf \
             gcc-aarch64-linux-gnu \
-            gcc-loongarch64-linux-gnu \
-            gcc-riscv64-linux-gnu \
             mingw-w64
 
       - name: Build WhatsApp Native binaries
@@ -76,10 +74,10 @@ jobs:
           GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 CC=arm-linux-gnueabihf-gcc go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-arm ./cmd/picoclaw
           
           echo "Building for Linux loong64..."
-          GOOS=linux GOARCH=loong64 CGO_ENABLED=1 CC=loongarch64-linux-gnu-gcc go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-loong64 ./cmd/picoclaw
+          GOOS=linux GOARCH=loong64 CGO_ENABLED=0 go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-loong64 ./cmd/picoclaw
           
           echo "Building for Linux riscv64..."
-          GOOS=linux GOARCH=riscv64 CGO_ENABLED=1 CC=riscv64-linux-gnu-gcc go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-riscv64 ./cmd/picoclaw
+          GOOS=linux GOARCH=riscv64 CGO_ENABLED=0 go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-riscv64 ./cmd/picoclaw
           
           echo "Building for Linux mipsle..."
           GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=0 go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-mipsle ./cmd/picoclaw
