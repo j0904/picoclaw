@@ -50,6 +50,10 @@ jobs:
           mkdir -p build
           TAG=${{ inputs.tag }}
           
+          echo "Copying workspace for embed..."
+          mkdir -p cmd/picoclaw/internal/onboard/workspace
+          cp -r workspace/* cmd/picoclaw/internal/onboard/workspace/
+          
           echo "Building for Linux amd64..."
           GOOS=linux GOARCH=amd64 go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-amd64 ./cmd/picoclaw
           
