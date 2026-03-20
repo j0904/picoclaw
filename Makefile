@@ -139,6 +139,7 @@ build-whatsapp-native: generate
 	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle)
 	GOOS=darwin GOARCH=arm64 $(GO) build -tags whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./$(CMD_DIR)
 	GOOS=windows GOARCH=amd64 $(GO) build -tags whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./$(CMD_DIR)
+	GOOS=windows GOARCH=arm64 $(GO) build -tags whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-arm64.exe ./$(CMD_DIR)
 ## @$(GO) build $(GOFLAGS) -tags whatsapp_native -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./$(CMD_DIR)
 	@echo "Build complete"
 ##	@ln -sf $(BINARY_NAME)-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/$(BINARY_NAME)
@@ -296,6 +297,24 @@ docker-clean:
 	docker compose -f docker/docker-compose.yml down -v
 	docker compose -f docker/docker-compose.full.yml down -v
 	docker rmi picoclaw:latest picoclaw:full 2>/dev/null || true
+
+## release-dry-run: Build all release binaries locally using GoReleaser
+release-dry-run:
+	@echo "Running GoReleaser dry-run (local build)..."
+	@corepack enable && corepack prepare pnpm@latest --activate
+	goreleaser build --clean --skip=docker --skip=publish --snapshot
+
+## release-local: Build all release binaries and create local archives
+release-local:
+	@echo "Building release binaries locally..."
+	@mkdir -p dist
+	@corepack enable && corepack prepare pnpm@latest --activate
+	goreleaser build --clean --skip=docker --skip=publish
+
+## release-github: Trigger GitHub release workflow (requires gh CLI)
+release-github:
+	@echo "Triggering GitHub release workflow..."
+	@gh workflow run release.yml
 
 
 ## build-macos-app: Build PicoClaw macOS .app bundle (no terminal window)

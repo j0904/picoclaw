@@ -192,6 +192,10 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 							Writer:     os.Stdout,
 							HalfBlocks: true,
 						})
+						qrFile := filepath.Join(c.storePath, "qrcode.txt")
+						if err := os.WriteFile(qrFile, []byte(evt.Code), 0600); err == nil {
+							logger.InfoCF("whatsapp", "QR code also saved to file", map[string]any{"path": qrFile})
+						}
 					} else {
 						logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
 					}
