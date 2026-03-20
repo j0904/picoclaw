@@ -79,9 +79,6 @@ jobs:
           echo "Building for Linux riscv64..."
           GOOS=linux GOARCH=riscv64 CGO_ENABLED=0 go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-riscv64 ./cmd/picoclaw
           
-          echo "Building for Linux mipsle..."
-          GOOS=linux GOARCH=mipsle GOMIPS=softfloat CGO_ENABLED=0 go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-linux-mipsle ./cmd/picoclaw
-          
           echo "Building for macOS arm64..."
           GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -tags whatsapp_native -ldflags "-s -w -X github.com/sipeed/picoclaw/pkg/config.Version=$TAG" -o build/picoclaw-darwin-arm64 ./cmd/picoclaw
           
