@@ -52,6 +52,25 @@ builds:
       - goos: netbsd
         goarch: arm
 
+  - id: picoclaw-whatsapp
+    env:
+      - CGO_ENABLED=1
+    tags:
+      - stdjson
+      - whatsapp_native
+    ldflags:
+      - -s -w
+      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    main: ./cmd/picoclaw
+
   - id: picoclaw-launcher
     binary: picoclaw-launcher
     env:
