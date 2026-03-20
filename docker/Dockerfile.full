@@ -1,24 +1,9 @@
 # ============================================================
-# Stage 1: Build the picoclaw binary
-# ============================================================
-FROM golang:1.26.0-alpine AS builder
-
-RUN apk add --no-cache git make
-
-WORKDIR /src
-
-# Cache dependencies
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy source and build
-COPY . .
-RUN make build
-
-# ============================================================
-# Stage 2: Node.js-based runtime with full MCP support
+# Node.js-based runtime with full MCP support - download pre-built binary
 # ============================================================
 FROM node:24-alpine3.23
+
+ARG VERSION=v0.2.3
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -34,8 +19,22 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
   ln -s /root/.local/bin/uvx /usr/local/bin/uvx && \
   uv --version
 
-# Copy binary
-COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+# Determine architecture and download binary
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64) GOARCH="x86_64" ;; \
+      aarch64) GOARCH="arm64" ;; \
+      armv7l) GOARCH="armv7" ;; \
+      armv6l) GOARCH="armv6" ;; \
+      riscv64) GOARCH="riscv64" ;; \
+      loongarch64) GOARCH="loong64" ;; \
+      *) echo "Unsupported architecture: $ARCH"; exit 1 ;; \
+    esac && \
+    curl -L -o /tmp/picoclaw.tar.gz \
+      "https://github.com/j0904/picoclaw/releases/download/${VERSION}/picoclaw_Linux_${GOARCH}.tar.gz" && \
+    tar -xzf /tmp/picoclaw.tar.gz -C /usr/local/bin picoclaw && \
+    rm /tmp/picoclaw.tar.gz && \
+    chmod +x /usr/local/bin/picoclaw
 
 # Create picoclaw home directory
 RUN /usr/local/bin/picoclaw onboard
