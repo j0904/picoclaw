@@ -70,11 +70,9 @@ builds:
 
   - id: picoclaw-windows-arm64
     env:
-      - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
+      - CGO_ENABLED=0
     tags:
       - stdjson
-      - whatsapp_native
     ldflags:
       - -s -w
       - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
