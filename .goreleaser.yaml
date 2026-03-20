@@ -55,6 +55,7 @@ builds:
   - id: picoclaw-whatsapp
     env:
       - CGO_ENABLED=1
+      - CC=x86_64-linux-gnu-gcc
     tags:
       - stdjson
       - whatsapp_native
@@ -68,6 +69,25 @@ builds:
       - linux
     goarch:
       - amd64
+    main: ./cmd/picoclaw
+
+  - id: picoclaw-whatsapp-arm64
+    binary: picoclaw-whatsapp
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    tags:
+      - stdjson
+      - whatsapp_native
+    ldflags:
+      - -s -w
+      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
+    goos:
+      - linux
+    goarch:
       - arm64
     main: ./cmd/picoclaw
 
