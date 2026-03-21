@@ -16,7 +16,6 @@ on:
         description: "Create as draft"
         required: false
         type: boolean
-        default: false
 
 jobs:
   create-tag:
