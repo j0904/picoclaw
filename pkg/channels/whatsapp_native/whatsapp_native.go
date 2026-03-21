@@ -11,6 +11,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -191,12 +194,8 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 								HalfBlocks: true,
 							})
 							qrPngFile := filepath.Join(c.storePath, "qrcode.png")
-							if qrc, err := qr.Encode(evt.Code, qr.M); err == nil {
-								if f, err := os.Create(qrPngFile); err == nil {
-									png.Encode(f, qrc.Image())
-									f.Close()
-									logger.InfoCF("whatsapp", "QR code saved to file", map[string]any{"path": qrPngFile})
-								}
+							if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
+								logger.InfoCF("whatsapp", "QR code saved to file", map[string]any{"path": qrPngFile})
 							}
 						} else {
 							logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
@@ -454,4 +453,50 @@ func parseJID(s string) (types.JID, error) {
 		return types.ParseJID(s)
 	}
 	return types.NewJID(s, types.DefaultUserServer), nil
+}
+
+const (
+	qrImageSize = 1024
+	margin      = 64
+)
+
+func saveQRCodePNG(code string, path string) error {
+	qrc, err := qr.Encode(code, qr.M)
+	if err != nil {
+		return err
+	}
+
+	qrImg := qrc.Image()
+	qrBounds := qrImg.Bounds()
+	qrSize := qrBounds.Dx()
+
+	scale := (qrImageSize - 2*margin) / qrSize
+	if scale < 1 {
+		scale = 1
+	}
+	scaledSize := qrSize * scale
+
+	canvas := image.NewRGBA(image.Rect(0, 0, qrImageSize, qrImageSize))
+	white := color.White
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{white}, image.Point{}, draw.Src)
+
+	offsetX := (qrImageSize - scaledSize) / 2
+	offsetY := (qrImageSize - scaledSize) / 2
+
+	for y := 0; y < scaledSize; y++ {
+		for x := 0; x < scaledSize; x++ {
+			srcX := x / scale
+			srcY := y / scale
+			if qrImg.At(qrBounds.Min.X+srcX, qrBounds.Min.Y+srcY) == color.Black {
+				canvas.Set(offsetX+x, offsetY+y, color.Black)
+			}
+		}
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return png.Encode(f, canvas)
 }
