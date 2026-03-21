@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	"rsc.io/qr"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -192,9 +194,13 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 							Writer:     os.Stdout,
 							HalfBlocks: true,
 						})
-						qrFile := filepath.Join(c.storePath, "qrcode.txt")
-						if err := os.WriteFile(qrFile, []byte(evt.Code), 0600); err == nil {
-							logger.InfoCF("whatsapp", "QR code also saved to file", map[string]any{"path": qrFile})
+						qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+						if qrc, err := qr.Encode(evt.Code, qr.M); err == nil {
+							if f, err := os.Create(qrPngFile); err == nil {
+								png.Encode(f, qrc.Image())
+								f.Close()
+								logger.InfoCF("whatsapp", "QR code saved to file", map[string]any{"path": qrPngFile})
+							}
 						}
 					} else {
 						logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
