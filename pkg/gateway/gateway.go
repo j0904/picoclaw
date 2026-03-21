@@ -33,7 +33,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/devices"
-	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/heartbeat"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
@@ -55,7 +54,6 @@ type services struct {
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
-	HealthServer     *health.Server
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 }
@@ -123,7 +121,7 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 		return err
 	}
 
-	// Setup manual reload channel for /reload endpoint
+	// Setup manual reload channel
 	manualReloadChan := make(chan struct{}, 1)
 	runningServices.manualReloadChan = manualReloadChan
 	reloadTrigger := func() error {
@@ -139,10 +137,9 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 			return fmt.Errorf("reload already queued")
 		}
 	}
-	runningServices.HealthServer.SetReloadFunc(reloadTrigger)
 	agentLoop.SetReloadFunc(reloadTrigger)
 
-	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
+	fmt.Println("✓ Gateway started")
 	fmt.Println("Press Ctrl+C to stop")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -298,19 +295,9 @@ func setupAndStartServices(
 		fmt.Println("⚠ Warning: No channels enabled")
 	}
 
-	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
-	runningServices.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
-	runningServices.ChannelManager.SetupHTTPServer(addr, runningServices.HealthServer)
-
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
 		return nil, fmt.Errorf("error starting channels: %w", err)
 	}
-
-	fmt.Printf(
-		"✓ Health endpoints available at http://%s:%d/health, /ready and /reload (POST)\n",
-		cfg.Gateway.Host,
-		cfg.Gateway.Port,
-	)
 
 	stateManager := state.NewManager(cfg.WorkspacePath())
 	runningServices.DeviceService = devices.NewService(devices.Config{
@@ -490,13 +477,6 @@ func restartServices(
 	} else {
 		fmt.Println("  ⚠ Warning: No channels enabled")
 	}
-
-	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
-	// Reuse existing HealthServer to preserve reloadFunc
-	if runningServices.HealthServer == nil {
-		runningServices.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
-	}
-	runningServices.ChannelManager.SetupHTTPServer(addr, runningServices.HealthServer)
 
 	if err = runningServices.ChannelManager.Reload(context.Background(), cfg); err != nil {
 		return fmt.Errorf("error reload channels: %w", err)
