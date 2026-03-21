@@ -59,25 +59,26 @@ type WhatsAppNativeChannel struct {
 	runCancel    context.CancelFunc
 	reconnectMu  sync.Mutex
 	reconnecting bool
-	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
-	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+	stopping     atomic.Bool // set once Stop begins; prevents new wg.Add calls
+	wg           sync.WaitGroup
+	hasConfigFile bool       // true if config.json exists (QR code only generated if true)
 }
 
-// NewWhatsAppNativeChannel creates a WhatsApp channel that uses whatsmeow for connection.
-// storePath is the directory for the SQLite session store (e.g. workspace/whatsapp).
 func NewWhatsAppNativeChannel(
 	cfg config.WhatsAppConfig,
 	bus *bus.MessageBus,
 	storePath string,
+	hasConfigFile bool,
 ) (channels.Channel, error) {
 	base := channels.NewBaseChannel("whatsapp_native", cfg, bus, cfg.AllowFrom, channels.WithMaxMessageLength(65536))
 	if storePath == "" {
 		storePath = "whatsapp"
 	}
 	c := &WhatsAppNativeChannel{
-		BaseChannel: base,
-		config:      cfg,
-		storePath:   storePath,
+		BaseChannel:    base,
+		config:         cfg,
+		storePath:      storePath,
+		hasConfigFile:  hasConfigFile,
 	}
 	return c, nil
 }
@@ -164,50 +165,48 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}
-		// Handle QR events in a background goroutine so Start() returns
-		// promptly.  The goroutine is tracked via c.wg and respects
-		// c.runCtx for cancellation.
-		// Guard wg.Add with reconnectMu + stopping check (same protocol
-		// as eventHandler) so a concurrent Stop() cannot enter wg.Wait()
-		// while we call wg.Add(1).
-		c.reconnectMu.Lock()
-		if c.stopping.Load() {
+		if c.hasConfigFile {
+			c.reconnectMu.Lock()
+			if c.stopping.Load() {
+				c.reconnectMu.Unlock()
+				return fmt.Errorf("channel stopped during QR setup")
+			}
+			c.wg.Add(1)
 			c.reconnectMu.Unlock()
-			return fmt.Errorf("channel stopped during QR setup")
-		}
-		c.wg.Add(1)
-		c.reconnectMu.Unlock()
-		go func() {
-			defer c.wg.Done()
-			for {
-				select {
-				case <-c.runCtx.Done():
-					return
-				case evt, ok := <-qrChan:
-					if !ok {
+			go func() {
+				defer c.wg.Done()
+				for {
+					select {
+					case <-c.runCtx.Done():
 						return
-					}
-					if evt.Event == "code" {
-						logger.InfoCF("whatsapp", "Scan this QR code with WhatsApp (Linked Devices):", nil)
-						qrterminal.GenerateWithConfig(evt.Code, qrterminal.Config{
-							Level:      qrterminal.L,
-							Writer:     os.Stdout,
-							HalfBlocks: true,
-						})
-						qrPngFile := filepath.Join(c.storePath, "qrcode.png")
-						if qrc, err := qr.Encode(evt.Code, qr.M); err == nil {
-							if f, err := os.Create(qrPngFile); err == nil {
-								png.Encode(f, qrc.Image())
-								f.Close()
-								logger.InfoCF("whatsapp", "QR code saved to file", map[string]any{"path": qrPngFile})
-							}
+					case evt, ok := <-qrChan:
+						if !ok {
+							return
 						}
-					} else {
-						logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
+						if evt.Event == "code" {
+							logger.InfoCF("whatsapp", "Scan this QR code with WhatsApp (Linked Devices):", nil)
+							qrterminal.GenerateWithConfig(evt.Code, qrterminal.Config{
+								Level:      qrterminal.L,
+								Writer:     os.Stdout,
+								HalfBlocks: true,
+							})
+							qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+							if qrc, err := qr.Encode(evt.Code, qr.M); err == nil {
+								if f, err := os.Create(qrPngFile); err == nil {
+									png.Encode(f, qrc.Image())
+									f.Close()
+									logger.InfoCF("whatsapp", "QR code saved to file", map[string]any{"path": qrPngFile})
+								}
+							}
+						} else {
+							logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
+						}
 					}
 				}
-			}
-		}()
+			}()
+		} else {
+			logger.InfoCF("whatsapp", "No config.json found, skipping QR code generation. Run 'picoclaw gateway' from directory with config.json to authenticate.", nil)
+		}
 	} else {
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect: %w", err)
