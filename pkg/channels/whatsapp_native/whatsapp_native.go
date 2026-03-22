@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
 	"rsc.io/qr"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -187,12 +186,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 							return
 						}
 						if evt.Event == "code" {
-							logger.InfoCF("whatsapp", "Scan this QR code with WhatsApp (Linked Devices):", nil)
-							qrterminal.GenerateWithConfig(evt.Code, qrterminal.Config{
-								Level:      qrterminal.L,
-								Writer:     os.Stdout,
-								HalfBlocks: true,
-							})
+							logger.InfoCF("whatsapp", "Scan the QR code saved at whatsapp/qrcode.png with WhatsApp (Linked Devices).", nil)
 							qrPngFile := filepath.Join(c.storePath, "qrcode.png")
 							if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
 								logger.InfoCF("whatsapp", "QR code saved to file", map[string]any{"path": qrPngFile})
@@ -456,8 +450,8 @@ func parseJID(s string) (types.JID, error) {
 }
 
 const (
-	qrImageSize = 1024
-	margin      = 64
+	qrImageSize = 800
+	margin      = 32
 )
 
 func saveQRCodePNG(code string, path string) error {
