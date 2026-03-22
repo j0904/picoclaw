@@ -117,13 +117,45 @@ builds:
     main: ./cmd/picoclaw-launcher-tui
 
 archives:
-  - id: default
+  - id: picoclaw
     ids:
       - picoclaw-linux-amd64
       - picoclaw-linux-arm64
       - picoclaw-windows-amd64
       - picoclaw-windows-arm64
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+  - id: picoclaw-launcher
+    ids:
       - picoclaw-launcher
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+  - id: picoclaw-launcher-tui
+    ids:
       - picoclaw-launcher-tui
     formats:
       - tar.gz
