@@ -1,11 +1,13 @@
 # ============================================================
 # Minimal runtime image - download pre-built binary
 # ============================================================
-FROM alpine:3.23
+FROM debian:bookworm-slim
 
-ARG VERSION=v0.2.3
+ARG VERSION=v1.0.1
 
-RUN apk add --no-cache ca-certificates tzdata curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates tzdata curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Determine architecture and download binary
 RUN ARCH=$(uname -m) && \
@@ -26,11 +28,11 @@ RUN ARCH=$(uname -m) && \
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -q --spider http://localhost:18790/health || exit 1
+  CMD curl -fs http://localhost:18790/health || exit 1
 
 # Create non-root user and group
-RUN addgroup -g 1000 picoclaw && \
-    adduser -D -u 1000 -G picoclaw picoclaw
+RUN groupadd -g 1000 picoclaw && \
+    useradd -u 1000 -g picoclaw -m -s /bin/bash picoclaw
 
 # Switch to non-root user
 USER picoclaw

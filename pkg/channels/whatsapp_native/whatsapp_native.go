@@ -160,6 +160,8 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	}()
 
 	if client.Store.ID == nil {
+		qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+		fmt.Printf("📱 WhatsApp not logged in — scan QR code to link device: %s\n", qrPngFile)
 		qrChan, err := client.GetQRChannel(c.runCtx)
 		if err != nil {
 			return fmt.Errorf("get QR channel: %w", err)
@@ -168,6 +170,8 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 			return fmt.Errorf("connect: %w", err)
 		}
 		if c.hasConfigFile {
+			qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+			logger.InfoCF("whatsapp", "Not logged in — waiting for QR code. Scan the file with WhatsApp (Linked Devices > Link a Device)", map[string]any{"qr_file": qrPngFile})
 			c.reconnectMu.Lock()
 			if c.stopping.Load() {
 				c.reconnectMu.Unlock()
@@ -188,12 +192,12 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 						if evt.Event == "code" {
 							qrPngFile := filepath.Join(c.storePath, "qrcode.png")
 							if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
-								logger.InfoCF("whatsapp", "QR code saved — open the file and scan it with WhatsApp (Linked Devices > Link a Device)", map[string]any{"path": qrPngFile})
+								fmt.Printf("📱 QR code updated — scan it now: %s\n", qrPngFile)
 							} else {
-								logger.InfoCF("whatsapp", "Failed to save QR code PNG", map[string]any{"error": err.Error()})
+								fmt.Printf("⚠ Failed to save QR code PNG: %v\n", err)
 							}
 						} else {
-							logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
+							fmt.Printf("✓ WhatsApp login event: %s\n", evt.Event)
 						}
 					}
 				}
@@ -202,6 +206,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 			logger.InfoCF("whatsapp", "No config.json found, skipping QR code generation. Run 'picoclaw gateway' from directory with config.json to authenticate.", nil)
 		}
 	} else {
+		fmt.Printf("✓ WhatsApp resuming existing session (%s)\n", client.Store.ID.String())
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}

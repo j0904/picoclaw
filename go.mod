@@ -3,8 +3,8 @@ module github.com/sipeed/picoclaw
 go 1.25.8
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	fyne.io/systray v1.12.0
+	github.com/BurntSushi/toml v1.6.0
 	github.com/adhocore/gronx v1.19.6
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/bwmarrin/discordgo v0.29.0
@@ -51,6 +51,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mdp/qrterminal/v3 v3.2.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/petermattis/goid v0.0.0-20260226131333-17d1149c6ac6 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
