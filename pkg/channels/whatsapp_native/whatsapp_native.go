@@ -186,10 +186,11 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 							return
 						}
 						if evt.Event == "code" {
-							logger.InfoCF("whatsapp", "Scan the QR code saved at whatsapp/qrcode.png with WhatsApp (Linked Devices).", nil)
 							qrPngFile := filepath.Join(c.storePath, "qrcode.png")
 							if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
-								logger.InfoCF("whatsapp", "QR code saved to file", map[string]any{"path": qrPngFile})
+								logger.InfoCF("whatsapp", "QR code saved — open the file and scan it with WhatsApp (Linked Devices > Link a Device)", map[string]any{"path": qrPngFile})
+							} else {
+								logger.InfoCF("whatsapp", "Failed to save QR code PNG", map[string]any{"error": err.Error()})
 							}
 						} else {
 							logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
@@ -460,9 +461,8 @@ func saveQRCodePNG(code string, path string) error {
 		return err
 	}
 
-	qrImg := qrc.Image()
-	qrBounds := qrImg.Bounds()
-	qrSize := qrBounds.Dx()
+	// qrc.Size is the number of modules (data pixels) in the QR code (no quiet zone)
+	qrSize := qrc.Size
 
 	scale := (qrImageSize - 2*margin) / qrSize
 	if scale < 1 {
@@ -477,12 +477,15 @@ func saveQRCodePNG(code string, path string) error {
 	offsetX := (qrImageSize - scaledSize) / 2
 	offsetY := (qrImageSize - scaledSize) / 2
 
-	for y := 0; y < scaledSize; y++ {
-		for x := 0; x < scaledSize; x++ {
-			srcX := x / scale
-			srcY := y / scale
-			if qrImg.At(qrBounds.Min.X+srcX, qrBounds.Min.Y+srcY) == color.Black {
-				canvas.Set(offsetX+x, offsetY+y, color.Black)
+	black := color.Black
+	for my := 0; my < qrSize; my++ {
+		for mx := 0; mx < qrSize; mx++ {
+			if qrc.Black(mx, my) {
+				for dy := 0; dy < scale; dy++ {
+					for dx := 0; dx < scale; dx++ {
+						canvas.Set(offsetX+mx*scale+dx, offsetY+my*scale+dy, black)
+					}
+				}
 			}
 		}
 	}
