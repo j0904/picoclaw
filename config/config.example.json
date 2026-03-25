@@ -75,8 +75,20 @@
       "model": "openai/gpt-5.4",
       "api_key": "sk-key2",
       "api_base": "https://api2.example.com/v1"
+    },
+    {
+      "_comment": "qwen-code via ACP stdio protocol. Install: npm install -g @qwen-code/qwen-code. Authenticate with: qwen --auth-type=qwen-oauth (free Qwen OAuth, no API key needed).",
+      "model_name": "qwen-code",
+      "model": "qwen-cli/qwen-max",
+      "workspace": "~/.picoclaw/workspace"
+    },
+    {
+      "_comment": "qwen-code at a custom binary path (e.g. /usr/local/bin/qwen)",
+      "model_name": "qwen-code-custom",
+      "model": "qwen-cli/qwen-max",
+      "api_base": "/usr/local/bin/qwen",
+      "workspace": "~/.picoclaw/workspace"
     }
-  ],
   "channels": {
     "telegram": {
       "enabled": false,
@@ -235,6 +247,14 @@
       "ping_interval": 30,
       "read_timeout": 60,
       "allow_from": []
+    },
+    "acp": {
+      "enabled": false,
+      "listen": ":8765",
+      "api_key": "",
+      "allow_from": [],
+      "run_ttl_seconds": 3600,
+      "allow_origins": []
     },
     "irc": {
       "enabled": false,
