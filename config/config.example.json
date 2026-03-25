@@ -286,6 +286,12 @@
         "search_engine": "search_std",
         "max_results": 5
       },
+      "baidu_search": {
+        "enabled": false,
+        "api_key": "",
+        "base_url": "https://qianfan.baidubce.com/v2/ai_search/web_search",
+        "max_results": 10
+      },
       "fetch_limit_bytes": 10485760,
       "private_host_whitelist": []
     },
