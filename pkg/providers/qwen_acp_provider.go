@@ -8,7 +8,6 @@ import (
 	"io"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -96,7 +95,7 @@ func (p *QwenACPProvider) Chat(
 	// --approval-mode=yolo prevents qwen from blocking on interactive permission prompts.
 	cmd := exec.CommandContext(ctx, p.command, acpFlag, "--approval-mode=yolo")
 	// Put qwen in its own process group so we can kill it and all its children.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	qwenSetProcessGroup(cmd)
 	// Do not set cmd.Dir — qwen uses the session/new cwd param instead.
 	// Setting cmd.Dir to a non-git workspace causes qwen to stall on project init.
 
@@ -125,7 +124,7 @@ func (p *QwenACPProvider) Chat(
 		case <-done:
 		case <-time.After(3 * time.Second):
 			// Kill the entire process group to catch any children qwen spawned.
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck
+			qwenKillProcessGroup(cmd)
 			<-done
 		}
 	}()
