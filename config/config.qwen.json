@@ -24,10 +24,10 @@
       "workspace": "~/.picoclaw/qwen-ws"
     },
     {
-      "_comment": "qwen-code at a custom binary path. Linux/macOS: /usr/local/bin/qwen. Windows: C:\\Users\\you\\AppData\\Roaming\\npm\\qwen.cmd",
+      "_comment": "qwen-code at a custom path or via npx. Linux/macOS: /usr/local/bin/qwen. Windows (npx): npx @qwen-code/qwen-code@latest. Windows (global install): C:\\Users\\you\\AppData\\Roaming\\npm\\qwen.cmd",
       "model_name": "qwen-code-custom",
       "model": "qwen-cli/qwen-max",
-      "api_base": "/usr/local/bin/qwen",
+      "api_base": "npx @qwen-code/qwen-code@latest",
       "workspace": "~/.picoclaw/qwen-ws"
     }
   ],

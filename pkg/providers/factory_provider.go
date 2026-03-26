@@ -211,9 +211,9 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if workspace == "" {
 			workspace = "."
 		}
-		// APIBase may be used to override the qwen binary path/command.
-		command := cfg.APIBase
-		return NewQwenACPProvider(command, workspace), modelID, nil
+		// APIBase may be a bare binary path or space-separated command+args,
+		// e.g. "npx @qwen-code/qwen-code@latest" for Windows npx users.
+		return NewQwenACPProvider(cfg.APIBase, workspace), modelID, nil
 
 	case "github-copilot", "copilot":
 		apiBase := cfg.APIBase

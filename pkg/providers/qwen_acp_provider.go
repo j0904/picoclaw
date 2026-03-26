@@ -40,19 +40,24 @@ type qwenACPEnvelope struct {
 type QwenACPProvider struct {
 	// command is the executable to launch (default: "qwen").
 	// Override via ModelConfig.APIBase for non-standard installations.
+	// APIBase may contain space-separated args, e.g. "npx @qwen-code/qwen-code@latest".
 	command   string
+	// extraArgs are prepended before the ACP flag, e.g. ["@qwen-code/qwen-code@latest"] for npx.
+	extraArgs  []string
 	workspace string
 	// cachedACPFlag is set once on first use: either "--acp" or "--experimental-acp".
 	cachedACPFlag string
 }
 
 // NewQwenACPProvider creates a QwenACPProvider.
-// command defaults to "qwen" when empty.
-func NewQwenACPProvider(command, workspace string) *QwenACPProvider {
-	if command == "" {
-		command = "qwen"
+// commandLine may be a single binary ("qwen") or space-separated command+args
+// ("npx @qwen-code/qwen-code@latest"). Defaults to "qwen" when empty.
+func NewQwenACPProvider(commandLine, workspace string) *QwenACPProvider {
+	if commandLine == "" {
+		commandLine = "qwen"
 	}
-	return &QwenACPProvider{command: command, workspace: workspace}
+	parts := strings.Fields(commandLine)
+	return &QwenACPProvider{command: parts[0], extraArgs: parts[1:], workspace: workspace}
 }
 
 // GetDefaultModel returns the canonical model identifier for config matching.
@@ -65,7 +70,8 @@ func (p *QwenACPProvider) acpFlag() string {
 	if p.cachedACPFlag != "" {
 		return p.cachedACPFlag
 	}
-	out, err := exec.Command(p.command, "--help").CombinedOutput()
+	helpArgs := append(append([]string{}, p.extraArgs...), "--help")
+	out, err := exec.Command(p.command, helpArgs...).CombinedOutput()
 	p.cachedACPFlag = "--experimental-acp" // default for old versions
 	if err == nil {
 		// Check each line for a standalone --acp option (not --experimental-acp).
@@ -93,7 +99,9 @@ func (p *QwenACPProvider) Chat(
 	// We detect which flag is supported by checking the binary once.
 	acpFlag := p.acpFlag()
 	// --approval-mode=yolo prevents qwen from blocking on interactive permission prompts.
-	cmd := exec.CommandContext(ctx, p.command, acpFlag, "--approval-mode=yolo")
+	// extraArgs (e.g. from "npx @qwen-code/qwen-code@latest") are inserted before the ACP flag.
+	cmdArgs := append(append([]string{}, p.extraArgs...), acpFlag, "--approval-mode=yolo")
+	cmd := exec.CommandContext(ctx, p.command, cmdArgs...)
 	// Put qwen in its own process group so we can kill it and all its children.
 	qwenSetProcessGroup(cmd)
 	// Do not set cmd.Dir — qwen uses the session/new cwd param instead.
