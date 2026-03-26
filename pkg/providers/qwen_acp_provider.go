@@ -8,6 +8,8 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // qwenACPEnvelope is a single NDJSON line exchanged over the
@@ -93,6 +95,8 @@ func (p *QwenACPProvider) Chat(
 	acpFlag := p.acpFlag()
 	// --approval-mode=yolo prevents qwen from blocking on interactive permission prompts.
 	cmd := exec.CommandContext(ctx, p.command, acpFlag, "--approval-mode=yolo")
+	// Put qwen in its own process group so we can kill it and all its children.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Do not set cmd.Dir — qwen uses the session/new cwd param instead.
 	// Setting cmd.Dir to a non-git workspace causes qwen to stall on project init.
 
@@ -110,7 +114,20 @@ func (p *QwenACPProvider) Chat(
 	}
 	defer func() {
 		stdinPipe.Close()
-		cmd.Wait() //nolint:errcheck
+		// qwen may not exit on its own after stdin is closed; give it a moment
+		// then force-kill to avoid blocking the caller indefinitely.
+		done := make(chan struct{})
+		go func() {
+			cmd.Wait() //nolint:errcheck
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			// Kill the entire process group to catch any children qwen spawned.
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck
+			<-done
+		}
 	}()
 
 	content, usage, err := p.runSession(ctx, stdinPipe, stdoutPipe, promptText)
@@ -216,6 +233,7 @@ func (p *QwenACPProvider) runSession(
 	}
 
 	// ── Step 1: initialize ────────────────────────────────────────────────────
+
 	if _, err := sendReq(nextID(), "initialize", map[string]any{
 		"protocolVersion": 1,
 		"clientCapabilities": map[string]any{
@@ -227,6 +245,7 @@ func (p *QwenACPProvider) runSession(
 	}
 
 	// ── Step 2: session/new ───────────────────────────────────────────────────
+
 	sessData, err := sendReq(nextID(), "session/new", map[string]any{
 		"cwd":        cwd,
 		"mcpServers": []any{},
