@@ -300,6 +300,7 @@ type ChannelsConfig struct {
 	Weixin     WeixinConfig     `json:"weixin"`
 	Pico       PicoConfig       `json:"pico"`
 	PicoClient PicoClientConfig `json:"pico_client"`
+	ACP        ACPConfig        `json:"acp"`
 	IRC        IRCConfig        `json:"irc"`
 }
 
@@ -551,6 +552,15 @@ type IRCConfig struct {
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
 	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_IRC_REASONING_CHANNEL_ID"`
+}
+
+type ACPConfig struct {
+	Enabled    bool                `json:"enabled"    env:"PICOCLAW_CHANNELS_ACP_ENABLED"`
+	Listen     string              `json:"listen"     env:"PICOCLAW_CHANNELS_ACP_LISTEN"`    // e.g. ":8765"
+	APIKey     string              `json:"api_key"    env:"PICOCLAW_CHANNELS_ACP_API_KEY"`   // optional bearer auth
+	AllowFrom  FlexibleStringSlice `json:"allow_from" env:"PICOCLAW_CHANNELS_ACP_ALLOW_FROM"`
+	RunTTL     int                 `json:"run_ttl_seconds,omitempty"` // seconds to keep completed runs; default 3600
+	AllowOrigins []string          `json:"allow_origins,omitempty"`
 }
 
 type HeartbeatConfig struct {

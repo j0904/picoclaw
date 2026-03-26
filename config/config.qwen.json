@@ -1,0 +1,74 @@
+{
+  "agents": {
+    "defaults": {
+      "log_level": "fatal",
+      "workspace": "~/.picoclaw/workspace",
+      "restrict_to_workspace": true,
+      "model_name": "qwen-code",
+      "max_tokens": 8192,
+      "temperature": 0.7,
+      "max_tool_iterations": 20,
+      "summarize_message_threshold": 20,
+      "summarize_token_percent": 75,
+      "tool_feedback": {
+        "enabled": false,
+        "max_args_length": 300
+      }
+    }
+  },
+  "model_list": [
+    {
+      "_comment": "qwen-code via ACP stdio protocol. Install: npm install -g @qwen-code/qwen-code. Authenticate with: qwen --auth-type=qwen-oauth (free Qwen OAuth, no API key needed).",
+      "model_name": "qwen-code",
+      "model": "qwen-cli/qwen-max",
+      "workspace": "~/.picoclaw/qwen-ws"
+    },
+    {
+      "_comment": "qwen-code at a custom path or via npx. Linux/macOS: /usr/local/bin/qwen. Windows (npx): npx @qwen-code/qwen-code@latest. Windows (global install): C:\\Users\\you\\AppData\\Roaming\\npm\\qwen.cmd",
+      "model_name": "qwen-code-custom",
+      "model": "qwen-cli/qwen-max",
+      "api_base": "npx @qwen-code/qwen-code@latest",
+      "workspace": "~/.picoclaw/qwen-ws"
+    }
+  ],
+  "channels": { 
+    "acp": {
+       "_comment": "  listen :8765 can be any, set to :0 for system set ", 
+      "enabled": true,
+      "listen": ":8765",
+      "api_key": "",
+      "allow_from": [],
+      "run_ttl_seconds": 3600,
+      "allow_origins": []
+    },
+    "telegram": {
+      "enabled": true,
+      "token": "",
+      "allow_from": []
+    },
+    "whatsapp": {
+      "enabled": true
+    }
+  },
+  "tools": {
+    "web": {
+      "enabled": true,
+      "duckduckgo": {
+        "enabled": true,
+        "max_results": 5
+      }
+    },
+    "cron": {
+      "enabled": true,
+      "exec_timeout_minutes": 5
+    },
+    "exec": {
+      "enabled": true,
+      "enable_deny_patterns": true
+    },
+    "skills": {
+      "enabled": true
+    }
+  } 
+ 
+}
