@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,7 +46,8 @@ type QwenACPProvider struct {
 	// extraArgs are prepended before the ACP flag, e.g. ["@qwen-code/qwen-code@latest"] for npx.
 	extraArgs  []string
 	workspace string
-	// cachedACPFlag is set once on first use: either "--acp" or "--experimental-acp".
+	// acpFlagOnce ensures acpFlag() is only detected once, even under concurrent calls.
+	acpFlagOnce  sync.Once
 	cachedACPFlag string
 }
 
@@ -67,23 +69,22 @@ func (p *QwenACPProvider) GetDefaultModel() string { return "qwen-code" }
 // Versions ≥ 1.x use --acp; v0.0.x uses --experimental-acp.
 // The result is detected once and cached on the provider instance.
 func (p *QwenACPProvider) acpFlag() string {
-	if p.cachedACPFlag != "" {
-		return p.cachedACPFlag
-	}
-	helpArgs := append(append([]string{}, p.extraArgs...), "--help")
-	out, err := exec.Command(p.command, helpArgs...).CombinedOutput()
-	p.cachedACPFlag = "--experimental-acp" // default for old versions
-	if err == nil {
-		// Check each line for a standalone --acp option (not --experimental-acp).
-		// Help lines look like "      --acp    Starts the agent in ACP mode".
-		for _, line := range strings.Split(string(out), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed == "--acp" || strings.HasPrefix(trimmed, "--acp ") || strings.HasPrefix(trimmed, "--acp\t") {
-				p.cachedACPFlag = "--acp"
-				break
+	p.acpFlagOnce.Do(func() {
+		helpArgs := append(append([]string{}, p.extraArgs...), "--help")
+		out, err := exec.Command(p.command, helpArgs...).CombinedOutput()
+		p.cachedACPFlag = "--experimental-acp" // default for old versions
+		if err == nil {
+			// Check each line for a standalone --acp option (not --experimental-acp).
+			// Help lines look like "      --acp    Starts the agent in ACP mode".
+			for _, line := range strings.Split(string(out), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "--acp" || strings.HasPrefix(trimmed, "--acp ") || strings.HasPrefix(trimmed, "--acp\t") {
+					p.cachedACPFlag = "--acp"
+					break
+				}
 			}
 		}
-	}
+	})
 	return p.cachedACPFlag
 }
 
@@ -92,6 +93,16 @@ func (p *QwenACPProvider) acpFlag() string {
 // close stdin.
 func (p *QwenACPProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) (*LLMResponse, error) {
+	return p.ChatWithStream(ctx, messages, tools, model, options, nil)
+}
+
+// ChatWithStream is like Chat but calls onChunk (if non-nil) with each text chunk
+// as it arrives from the agent.  This enables the caller to stream responses
+// (e.g. via SSE) without waiting for the full reply.
+func (p *QwenACPProvider) ChatWithStream(
+	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
+	onChunk func(string),
 ) (*LLMResponse, error) {
 	promptText := p.buildPrompt(messages, tools)
 
@@ -137,7 +148,7 @@ func (p *QwenACPProvider) Chat(
 		}
 	}()
 
-	content, usage, err := p.runSession(ctx, stdinPipe, stdoutPipe, promptText)
+	content, usage, err := p.runSession(ctx, stdinPipe, stdoutPipe, promptText, onChunk)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +169,9 @@ func (p *QwenACPProvider) Chat(
 }
 
 // runSession drives the full ACP JSON-RPC handshake over the subprocess pipes.
+// onChunk, if non-nil, is called with each text chunk as it arrives from the agent.
 func (p *QwenACPProvider) runSession(
-	ctx context.Context, w io.Writer, r io.Reader, prompt string,
+	ctx context.Context, w io.Writer, r io.Reader, prompt string, onChunk func(string),
 ) (string, *UsageInfo, error) {
 	enc := json.NewEncoder(w)
 	var idSeq int64
@@ -307,7 +319,7 @@ func (p *QwenACPProvider) runSession(
 
 		switch env.Method {
 		case "session/update":
-			collectUpdate(env.Params, &parts, &usage)
+			collectUpdate(env.Params, &parts, &usage, onChunk)
 		case "session/request_permission":
 			if len(env.ID) > 0 {
 				handlePermission(send, env)
@@ -320,7 +332,8 @@ func (p *QwenACPProvider) runSession(
 
 // collectUpdate parses a session/update notification and appends any
 // agent_message_chunk text to parts, updating usage on usage_update.
-func collectUpdate(raw json.RawMessage, parts *[]string, usage **UsageInfo) {
+// onChunk is called with each text chunk if non-nil.
+func collectUpdate(raw json.RawMessage, parts *[]string, usage **UsageInfo, onChunk func(string)) {
 	var notif struct {
 		Update struct {
 			SessionUpdate string `json:"sessionUpdate"`
@@ -340,6 +353,9 @@ func collectUpdate(raw json.RawMessage, parts *[]string, usage **UsageInfo) {
 	case "agent_message_chunk":
 		if notif.Update.Content.Type == "text" {
 			*parts = append(*parts, notif.Update.Content.Text)
+			if onChunk != nil {
+				onChunk(notif.Update.Content.Text)
+			}
 		}
 	case "usage_update":
 		*usage = &UsageInfo{

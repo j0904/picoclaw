@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/bridge"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	_ "github.com/sipeed/picoclaw/pkg/channels/dingtalk"
@@ -55,6 +56,7 @@ type services struct {
 	MediaStore       media.MediaStore
 	ChannelManager   *channels.Manager
 	DeviceService    *devices.Service
+	Bridge           *bridge.Bridge
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 }
@@ -312,6 +314,20 @@ func setupAndStartServices(
 		fmt.Println("✓ Device event service started")
 	}
 
+	if cfg.Bridge.Enabled {
+		qwenProvider := bridge.ProviderFromModelList(cfg)
+		if qwenProvider != nil {
+			b := bridge.New(cfg.Bridge, qwenProvider)
+			if err = b.Start(context.Background()); err != nil {
+				logger.ErrorCF("bridge", "Failed to start bridge", map[string]any{"error": err.Error()})
+			} else {
+				runningServices.Bridge = b
+			}
+		} else {
+			logger.Warn("bridge: enabled but no qwen-code model found in model_list — bridge not started")
+		}
+	}
+
 	return runningServices, nil
 }
 
@@ -319,7 +335,9 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
-	// reload should not stop channel manager
+	if runningServices.Bridge != nil {
+		runningServices.Bridge.Stop(shutdownCtx)
+	}
 	if !isReload && runningServices.ChannelManager != nil {
 		runningServices.ChannelManager.StopAll(shutdownCtx)
 	}

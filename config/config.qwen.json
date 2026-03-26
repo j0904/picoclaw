@@ -69,6 +69,12 @@
     "skills": {
       "enabled": true
     }
-  } 
+  },
+  "bridge": {
+    "_comment": "Web API bridge: exposes qwen directly as HTTP. Set enabled=true to activate. POST /chat for sync, POST /chat/stream for SSE.",
+    "enabled": true,
+    "listen": ":9090",
+    "api_key": ""
+  }
  
 }

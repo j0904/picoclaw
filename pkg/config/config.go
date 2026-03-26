@@ -84,6 +84,7 @@ type Config struct {
 	Providers ProvidersConfig `json:"providers,omitempty"`
 	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
 	Gateway   GatewayConfig   `json:"gateway"`
+	Bridge    BridgeConfig    `json:"bridge,omitempty"`
 	Tools     ToolsConfig     `json:"tools"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	Devices   DevicesConfig   `json:"devices"`
@@ -705,6 +706,16 @@ type GatewayConfig struct {
 	Host      string `json:"host"       env:"PICOCLAW_GATEWAY_HOST"`
 	Port      int    `json:"port"       env:"PICOCLAW_GATEWAY_PORT"`
 	HotReload bool   `json:"hot_reload" env:"PICOCLAW_GATEWAY_HOT_RELOAD"`
+}
+
+// BridgeConfig configures the optional Web API bridge that exposes qwen ACP
+// as a simple stateless HTTP endpoint.  Disabled by default.
+type BridgeConfig struct {
+	Enabled bool   `json:"enabled" env:"PICOCLAW_BRIDGE_ENABLED"`
+	// Listen is the address the bridge listens on, e.g. ":9090" or "127.0.0.1:9090".
+	Listen string `json:"listen"  env:"PICOCLAW_BRIDGE_LISTEN"`
+	// APIKey, when non-empty, requires callers to present "Authorization: Bearer <key>".
+	APIKey string `json:"api_key" env:"PICOCLAW_BRIDGE_API_KEY"`
 }
 
 type ToolDiscoveryConfig struct {
