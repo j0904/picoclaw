@@ -11,6 +11,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,8 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
+	"rsc.io/qr"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -57,25 +61,26 @@ type WhatsAppNativeChannel struct {
 	runCancel    context.CancelFunc
 	reconnectMu  sync.Mutex
 	reconnecting bool
-	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
-	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+	stopping     atomic.Bool // set once Stop begins; prevents new wg.Add calls
+	wg           sync.WaitGroup
+	hasConfigFile bool       // true if config.json exists (QR code only generated if true)
 }
 
-// NewWhatsAppNativeChannel creates a WhatsApp channel that uses whatsmeow for connection.
-// storePath is the directory for the SQLite session store (e.g. workspace/whatsapp).
 func NewWhatsAppNativeChannel(
 	cfg config.WhatsAppConfig,
 	bus *bus.MessageBus,
 	storePath string,
+	hasConfigFile bool,
 ) (channels.Channel, error) {
 	base := channels.NewBaseChannel("whatsapp_native", cfg, bus, cfg.AllowFrom, channels.WithMaxMessageLength(65536))
 	if storePath == "" {
 		storePath = "whatsapp"
 	}
 	c := &WhatsAppNativeChannel{
-		BaseChannel: base,
-		config:      cfg,
-		storePath:   storePath,
+		BaseChannel:    base,
+		config:         cfg,
+		storePath:      storePath,
+		hasConfigFile:  hasConfigFile,
 	}
 	return c, nil
 }
@@ -155,6 +160,8 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	}()
 
 	if client.Store.ID == nil {
+		qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+		fmt.Printf("📱 WhatsApp not logged in — scan QR code to link device: %s\n", qrPngFile)
 		qrChan, err := client.GetQRChannel(c.runCtx)
 		if err != nil {
 			return fmt.Errorf("get QR channel: %w", err)
@@ -162,43 +169,44 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}
-		// Handle QR events in a background goroutine so Start() returns
-		// promptly.  The goroutine is tracked via c.wg and respects
-		// c.runCtx for cancellation.
-		// Guard wg.Add with reconnectMu + stopping check (same protocol
-		// as eventHandler) so a concurrent Stop() cannot enter wg.Wait()
-		// while we call wg.Add(1).
-		c.reconnectMu.Lock()
-		if c.stopping.Load() {
+		if c.hasConfigFile {
+			qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+			logger.InfoCF("whatsapp", "Not logged in — waiting for QR code. Scan the file with WhatsApp (Linked Devices > Link a Device)", map[string]any{"qr_file": qrPngFile})
+			c.reconnectMu.Lock()
+			if c.stopping.Load() {
+				c.reconnectMu.Unlock()
+				return fmt.Errorf("channel stopped during QR setup")
+			}
+			c.wg.Add(1)
 			c.reconnectMu.Unlock()
-			return fmt.Errorf("channel stopped during QR setup")
-		}
-		c.wg.Add(1)
-		c.reconnectMu.Unlock()
-		go func() {
-			defer c.wg.Done()
-			for {
-				select {
-				case <-c.runCtx.Done():
-					return
-				case evt, ok := <-qrChan:
-					if !ok {
+			go func() {
+				defer c.wg.Done()
+				for {
+					select {
+					case <-c.runCtx.Done():
 						return
-					}
-					if evt.Event == "code" {
-						logger.InfoCF("whatsapp", "Scan this QR code with WhatsApp (Linked Devices):", nil)
-						qrterminal.GenerateWithConfig(evt.Code, qrterminal.Config{
-							Level:      qrterminal.L,
-							Writer:     os.Stdout,
-							HalfBlocks: true,
-						})
-					} else {
-						logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
+					case evt, ok := <-qrChan:
+						if !ok {
+							return
+						}
+						if evt.Event == "code" {
+							qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+							if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
+								fmt.Printf("📱 QR code updated — scan it now: %s\n", qrPngFile)
+							} else {
+								fmt.Printf("⚠ Failed to save QR code PNG: %v\n", err)
+							}
+						} else {
+							fmt.Printf("✓ WhatsApp login event: %s\n", evt.Event)
+						}
 					}
 				}
-			}
-		}()
+			}()
+		} else {
+			logger.InfoCF("whatsapp", "No config.json found, skipping QR code generation. Run 'picoclaw gateway' from directory with config.json to authenticate.", nil)
+		}
 	} else {
+		fmt.Printf("✓ WhatsApp resuming existing session (%s)\n", client.Store.ID.String())
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}
@@ -445,4 +453,52 @@ func parseJID(s string) (types.JID, error) {
 		return types.ParseJID(s)
 	}
 	return types.NewJID(s, types.DefaultUserServer), nil
+}
+
+const (
+	qrImageSize = 800
+	margin      = 32
+)
+
+func saveQRCodePNG(code string, path string) error {
+	qrc, err := qr.Encode(code, qr.M)
+	if err != nil {
+		return err
+	}
+
+	// qrc.Size is the number of modules (data pixels) in the QR code (no quiet zone)
+	qrSize := qrc.Size
+
+	scale := (qrImageSize - 2*margin) / qrSize
+	if scale < 1 {
+		scale = 1
+	}
+	scaledSize := qrSize * scale
+
+	canvas := image.NewRGBA(image.Rect(0, 0, qrImageSize, qrImageSize))
+	white := color.White
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{white}, image.Point{}, draw.Src)
+
+	offsetX := (qrImageSize - scaledSize) / 2
+	offsetY := (qrImageSize - scaledSize) / 2
+
+	black := color.Black
+	for my := 0; my < qrSize; my++ {
+		for mx := 0; mx < qrSize; mx++ {
+			if qrc.Black(mx, my) {
+				for dy := 0; dy < scale; dy++ {
+					for dx := 0; dx < scale; dx++ {
+						canvas.Set(offsetX+mx*scale+dx, offsetY+my*scale+dy, black)
+					}
+				}
+			}
+		}
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return png.Encode(f, canvas)
 }

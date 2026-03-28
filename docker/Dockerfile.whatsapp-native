@@ -1,0 +1,45 @@
+# ============================================================
+# Build image with WhatsApp Native support
+# ============================================================
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    libc-dev \
+    git \
+    nodejs \
+    npm
+
+RUN npm install -g pnpm
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=1 go build -tags "whatsapp_native" -ldflags "-s -w" -o picoclaw ./cmd/picoclaw
+
+# ============================================================
+# Runtime image
+# ============================================================
+FROM alpine:3.23
+
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY --from=builder /build/picoclaw /usr/local/bin/picoclaw
+
+RUN addgroup -g 1000 picoclaw && \
+    adduser -D -u 1000 -G picoclaw picoclaw
+
+USER picoclaw
+
+RUN /usr/local/bin/picoclaw onboard
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -q --spider http://localhost:18790/health || exit 1
+
+ENTRYPOINT ["picoclaw"]
+CMD ["gateway"]
