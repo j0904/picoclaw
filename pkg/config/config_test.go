@@ -120,7 +120,6 @@ func TestAgentConfig_FullParse(t *testing.T) {
 					"primary": "claude-opus",
 					"fallbacks": ["haiku"]
 				},
-				"tools": ["read_file", "web_search"],
 				"subagents": {
 					"allow_agents": ["sales"]
 				}
@@ -171,10 +170,6 @@ func TestAgentConfig_FullParse(t *testing.T) {
 	}
 	if len(support.Model.Fallbacks) != 1 || support.Model.Fallbacks[0] != "haiku" {
 		t.Errorf("support.Model.Fallbacks = %v", support.Model.Fallbacks)
-	}
-	if len(support.Tools) != 2 || support.Tools[0] != "read_file" ||
-		support.Tools[1] != "web_search" {
-		t.Errorf("support.Tools = %v", support.Tools)
 	}
 	if support.Subagents == nil || len(support.Subagents.AllowAgents) != 1 {
 		t.Errorf("support.Subagents = %+v", support.Subagents)

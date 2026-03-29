@@ -73,22 +73,20 @@ export PICOCLAW_BUILTIN_SKILLS=/path/to/skills
 
 ### Allowlist dei Tool per Agent
 
-Puoi limitare un singolo agent a un sottoinsieme di tool runtime con `agents.list[].tools`.
+La dichiarazione dei tool per-agent vive nel frontmatter di `AGENT.md`, non in `config.json`.
 
-Se `tools` è omesso, l'agent riceve il normale set globale dei tool abilitati. Se `tools` è presente, PicoClaw registra per quell'agent solo i tool elencati.
+Se `tools` è omesso nel frontmatter, l'agent riceve il normale set globale dei tool abilitati. Se `tools` è presente, PicoClaw registra per quell'agent solo i tool runtime elencati.
 
-```json
-{
-  "agents": {
-    "list": [
-      {
-        "id": "research",
-        "name": "Research Agent",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "message"]
-      }
-    ]
-  }
-}
+```md
+---
+name: Research Agent
+description: Specialista per ricerca web e analisi approfondita.
+tools: [read_file, write_file, web_search, web_fetch, message]
+skills: [deep-research]
+mcpServers: [web-index]
+---
+
+Sei l'agent di ricerca.
 ```
 
 Note:
@@ -96,7 +94,7 @@ Note:
 - È una allowlist reale, non un suggerimento per l'LLM.
 - I nomi dei tool fanno match 1:1 con il nome runtime del tool.
 - Se ti serve controllo preciso, usa i nomi runtime effettivi come `web_search`, `web_fetch`, `spawn`, `subagent`, `send_file`.
-- Il campo `available_tools` nella Agent Discovery riflette il risultato filtrato reale.
+- `available_tools` nella Agent Discovery riflette il risultato runtime filtrato, mentre `tools` riflette l'identità dichiarata in `AGENT.md`.
 
 ### Discovery Multi-Agent (Automatica)
 
@@ -109,9 +107,12 @@ Ogni entry include:
 | Campo | Significato |
 |-------|-------------|
 | `id` | ID stabile dell'agent |
-| `name` | Nome leggibile dell'agent |
-| `description` | Riassunto breve delle capacità |
-| `model` | Modello attualmente usato da quell'agent |
+| `name` | Nome identitario da `AGENT.md` frontmatter |
+| `description` | Descrizione identitaria da `AGENT.md` frontmatter |
+| `tools` | Tool dichiarati nel frontmatter di `AGENT.md` |
+| `skills` | Skill dichiarate nel frontmatter di `AGENT.md` |
+| `mcpServers` | Server MCP dichiarati nel frontmatter di `AGENT.md` |
+| `model` | Modello dichiarato nel frontmatter di `AGENT.md` |
 | `available_tools` | Tool attualmente visibili a quell'agent |
 | `channels` | Canali instradati verso quell'agent |
 
@@ -119,8 +120,8 @@ Dettagli importanti:
 
 - La sezione include anche l'entry dell'agent corrente, quindi c'è self-awareness.
 - `available_tools` è il campo più importante per delegare bene: l'LLM vede i tool reali del peer, non deve indovinarli dalla sola descrizione.
-- `description` viene presa da `AGENT.md` frontmatter `description` quando presente; altrimenti dal primo paragrafo utile di `AGENT.md`, e in fallback da `SOUL.md`.
-- `name` arriva prima da `agents.list[].name`, poi da `AGENT.md` frontmatter `name`, e in fallback dall'ID dell'agent.
+- I campi di identità (`name`, `description`, `tools`, `skills`, `mcpServers`, `model`) arrivano dal frontmatter di `AGENT.md`.
+- `config.json` resta il layer infrastrutturale: workspace, agent di default, routing e permessi di subagent.
 - `channels` derivano dal routing:
   - l'agent di default espone i canali abilitati
   - gli altri agent espongono i canali che hanno un binding esplicito verso di loro
@@ -135,6 +136,9 @@ Forma dell'oggetto iniettato:
       "id": "main",
       "name": "Main Assistant",
       "description": "Agent generalista per richieste quotidiane.",
+      "tools": ["read_file", "write_file", "exec", "spawn"],
+      "skills": ["coordination"],
+      "mcpServers": ["filesystem"],
       "model": "gpt-4o-mini",
       "available_tools": ["read_file", "write_file", "exec", "spawn"],
       "channels": ["telegram", "discord"]
@@ -143,6 +147,9 @@ Forma dell'oggetto iniettato:
       "id": "research",
       "name": "Research Agent",
       "description": "Specialista per investigazioni e lavoro web.",
+      "tools": ["read_file", "web_search", "web_fetch", "message"],
+      "skills": ["deep-research"],
+      "mcpServers": ["web-index"],
       "model": "claude-sonnet-4.5",
       "available_tools": ["web_search", "web_fetch", "read_file"],
       "channels": ["telegram"]

@@ -101,7 +101,7 @@ func TestToolRegistry_RegisterAndGet(t *testing.T) {
 
 func TestToolRegistry_AllowlistFiltersRegistrations(t *testing.T) {
 	r := NewToolRegistry()
-	r.SetAllowlist([]string{"allowed_tool"})
+	r.SetAllowlist([]string{"Allowed_Tool"})
 
 	r.Register(newMockTool("allowed_tool", "allowed"))
 	r.Register(newMockTool("blocked_tool", "blocked"))

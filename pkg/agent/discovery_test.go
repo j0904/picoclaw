@@ -13,6 +13,10 @@ func TestAgentRegistry_ListAgentsBuildsStructuredDescriptors(t *testing.T) {
 		"AGENT.md": `---
 name: Main Frontmatter Name
 description: Structured main agent
+model: main-frontmatter-model
+tools: [read_file, write_file]
+skills: [coordination]
+mcpServers: [filesystem]
 ---
 # Agent
 
@@ -22,21 +26,24 @@ Handle general requests.
 	defer cleanupWorkspace(t, mainWorkspace)
 
 	supportWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `# Agent
+		"AGENT.md": `---
+name: Support Frontmatter Name
+description: Support frontmatter description
+model: support-frontmatter-model
+tools: [read_file]
+skills: [support-playbook]
+mcpServers: [support-db]
+---
+# Agent
 
 Handle support tickets carefully.
 `,
-		"SOUL.md": "# Soul\nStay calm and precise.",
 	})
 	defer cleanupWorkspace(t, supportWorkspace)
 
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "main", Default: true, Name: "Configured Main", Workspace: mainWorkspace},
-		{
-			ID:        "support",
-			Workspace: supportWorkspace,
-			Model:     &config.AgentModelConfig{Primary: "support-model"},
-		},
+		{ID: "support", Workspace: supportWorkspace},
 	})
 	cfg.Tools.ReadFile.Enabled = true
 	cfg.Tools.WriteFile.Enabled = true
@@ -61,14 +68,23 @@ Handle support tickets carefully.
 	if descriptors[0].ID != "main" {
 		t.Fatalf("expected current workspace agent first, got %q", descriptors[0].ID)
 	}
-	if descriptors[0].Name != "Configured Main" {
-		t.Fatalf("expected config name to win, got %q", descriptors[0].Name)
+	if descriptors[0].Name != "Main Frontmatter Name" {
+		t.Fatalf("expected frontmatter name to drive discovery, got %q", descriptors[0].Name)
 	}
 	if descriptors[0].Description != "Structured main agent" {
 		t.Fatalf("expected frontmatter description, got %q", descriptors[0].Description)
 	}
-	if descriptors[0].Model != "gpt-4" {
-		t.Fatalf("expected inherited model, got %q", descriptors[0].Model)
+	if descriptors[0].Model != "main-frontmatter-model" {
+		t.Fatalf("expected frontmatter model, got %q", descriptors[0].Model)
+	}
+	if !slices.Equal(descriptors[0].Tools, []string{"read_file", "write_file"}) {
+		t.Fatalf("expected declared frontmatter tools, got %v", descriptors[0].Tools)
+	}
+	if !slices.Equal(descriptors[0].Skills, []string{"coordination"}) {
+		t.Fatalf("expected frontmatter skills, got %v", descriptors[0].Skills)
+	}
+	if !slices.Equal(descriptors[0].MCPServers, []string{"filesystem"}) {
+		t.Fatalf("expected frontmatter mcpServers, got %v", descriptors[0].MCPServers)
 	}
 	if !slices.Contains(descriptors[0].AvailableTools, "read_file") ||
 		!slices.Contains(descriptors[0].AvailableTools, "write_file") {
@@ -85,11 +101,20 @@ Handle support tickets carefully.
 	if !ok || support == nil {
 		t.Fatal("expected support descriptor lookup to succeed")
 	}
-	if support.Description != "Handle support tickets carefully." {
-		t.Fatalf("expected AGENT body fallback description, got %q", support.Description)
+	if support.Name != "Support Frontmatter Name" {
+		t.Fatalf("expected support frontmatter name, got %q", support.Name)
 	}
-	if support.Model != "support-model" {
-		t.Fatalf("expected explicit support model, got %q", support.Model)
+	if support.Description != "Support frontmatter description" {
+		t.Fatalf("expected support frontmatter description, got %q", support.Description)
+	}
+	if support.Model != "support-frontmatter-model" {
+		t.Fatalf("expected support frontmatter model, got %q", support.Model)
+	}
+	if !slices.Equal(support.Skills, []string{"support-playbook"}) {
+		t.Fatalf("expected support skills, got %v", support.Skills)
+	}
+	if !slices.Equal(support.MCPServers, []string{"support-db"}) {
+		t.Fatalf("expected support mcpServers, got %v", support.MCPServers)
 	}
 	if !slices.Equal(support.Channels, []string{"telegram"}) {
 		t.Fatalf("expected support channel binding, got %v", support.Channels)
@@ -100,6 +125,7 @@ func TestContextBuilder_BuildMessagesIncludesAgentDiscoverySection(t *testing.T)
 	mainWorkspace := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---
 description: Main agent
+skills: [coordination]
 ---
 # Agent
 
@@ -111,6 +137,8 @@ Generalist.
 	researchWorkspace := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---
 description: Research specialist
+skills: [deep-research]
+mcpServers: [web-index]
 ---
 # Agent
 
@@ -161,6 +189,12 @@ Investigate deeply.
 		!strings.Contains(systemPrompt, `"read_file"`) ||
 		!strings.Contains(systemPrompt, `"write_file"`) {
 		t.Fatalf("expected visible tool list in discovery section, got %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, `"skills": [`) || !strings.Contains(systemPrompt, `"deep-research"`) {
+		t.Fatalf("expected frontmatter skills in discovery section, got %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, `"mcpServers": [`) || !strings.Contains(systemPrompt, `"web-index"`) {
+		t.Fatalf("expected frontmatter mcpServers in discovery section, got %q", systemPrompt)
 	}
 }
 

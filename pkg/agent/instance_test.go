@@ -281,3 +281,42 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 		t.Fatal("read_file tool should still be registered")
 	}
 }
+
+func TestNewAgentInstance_UsesFrontmatterModelAndSkills(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": `---
+model: frontmatter-model
+skills: [frontmatter-skill]
+---
+# Agent
+
+Use frontmatter identity.
+`,
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "default-model",
+			},
+		},
+	}
+
+	agent := NewAgentInstance(&config.AgentConfig{
+		ID:        "research",
+		Workspace: workspace,
+		Model: &config.AgentModelConfig{
+			Primary: "config-model",
+		},
+		Skills: []string{"config-skill"},
+	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if agent.Model != "frontmatter-model" {
+		t.Fatalf("agent.Model = %q, want frontmatter-model", agent.Model)
+	}
+	if len(agent.SkillsFilter) != 1 || agent.SkillsFilter[0] != "frontmatter-skill" {
+		t.Fatalf("agent.SkillsFilter = %v, want [frontmatter-skill]", agent.SkillsFilter)
+	}
+}

@@ -248,22 +248,20 @@ In other words: **channel + account form the candidate set; peer/guild/team then
 
 ### Agent Tool Allowlist
 
-You can restrict an individual agent to a subset of runtime tools with `agents.list[].tools`.
+Per-agent tool declarations live in `AGENT.md` frontmatter, not in `config.json`.
 
-If `tools` is omitted, the agent gets the normal globally enabled tool set. If `tools` is present, PicoClaw registers only the listed tools for that agent.
+If `tools` is omitted from frontmatter, the agent gets the normal globally enabled tool set. If `tools` is present, PicoClaw registers only the listed runtime tools for that agent.
 
-```json
-{
-  "agents": {
-    "list": [
-      {
-        "id": "research",
-        "name": "Research Agent",
-        "tools": ["read_file", "write_file", "web_search", "web_fetch", "message"]
-      }
-    ]
-  }
-}
+```md
+---
+name: Research Agent
+description: Specialist for web research and in-depth analysis.
+tools: [read_file, write_file, web_search, web_fetch, message]
+skills: [deep-research]
+mcpServers: [web-index]
+---
+
+You are the research agent.
 ```
 
 Notes:
@@ -271,7 +269,7 @@ Notes:
 - This is an allowlist, not a preference hint.
 - Tool names are matched against the runtime tool name 1:1.
 - Use runtime tool names such as `web_search`, `web_fetch`, `spawn`, `subagent`, `send_file`.
-- The `available_tools` field in Agent Discovery reflects the filtered runtime result.
+- `available_tools` in Agent Discovery reflects the filtered runtime result, while `tools` reflects the identity declared in `AGENT.md`.
 
 ### Agent Discovery (Automatic)
 
@@ -284,9 +282,12 @@ Each entry includes:
 | Field | Meaning |
 |-------|---------|
 | `id` | Stable agent id |
-| `name` | Human-friendly agent name |
-| `description` | Short capability summary |
-| `model` | Current model used by that agent |
+| `name` | Agent identity name from `AGENT.md` frontmatter |
+| `description` | Agent identity description from `AGENT.md` frontmatter |
+| `tools` | Declared tool identity from `AGENT.md` frontmatter |
+| `skills` | Declared skill identity from `AGENT.md` frontmatter |
+| `mcpServers` | Declared MCP server identity from `AGENT.md` frontmatter |
+| `model` | Declared model from `AGENT.md` frontmatter |
 | `available_tools` | Tool names currently visible to that agent |
 | `channels` | Channels that route to that agent |
 
@@ -294,8 +295,8 @@ Important behavior:
 
 - The discovery section includes the current agent's own entry, so the model has self-awareness.
 - `available_tools` is the most important field for delegation. It reflects the tools the target agent can actually use, not just a natural-language description.
-- `description` is sourced from `AGENT.md` frontmatter `description` when available, otherwise from the first meaningful paragraph of `AGENT.md`, and finally `SOUL.md`.
-- `name` comes from `agents.list[].name` first, then `AGENT.md` frontmatter `name`, then falls back to the agent id.
+- Identity fields (`name`, `description`, `tools`, `skills`, `mcpServers`, `model`) come from `AGENT.md` frontmatter.
+- `config.json` remains the infrastructure layer: workspace, default agent selection, routing, and subagent permissions.
 - `channels` come from routing state:
   - the default agent exposes enabled channels
   - other agents expose channels that explicitly bind to them through `bindings`
@@ -310,6 +311,9 @@ Example injected shape:
       "id": "main",
       "name": "Main Assistant",
       "description": "Generalist agent for day-to-day requests.",
+      "tools": ["read_file", "write_file", "exec", "spawn"],
+      "skills": ["coordination"],
+      "mcpServers": ["filesystem"],
       "model": "gpt-4o-mini",
       "available_tools": ["read_file", "write_file", "exec", "spawn"],
       "channels": ["telegram", "discord"]
@@ -318,6 +322,9 @@ Example injected shape:
       "id": "research",
       "name": "Research Agent",
       "description": "Specialist for long-form investigation and web work.",
+      "tools": ["read_file", "web_search", "web_fetch", "message"],
+      "skills": ["deep-research"],
+      "mcpServers": ["web-index"],
       "model": "claude-sonnet-4.5",
       "available_tools": ["web_search", "web_fetch", "read_file"],
       "channels": ["telegram"]

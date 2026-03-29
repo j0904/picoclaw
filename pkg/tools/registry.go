@@ -51,7 +51,7 @@ func (r *ToolRegistry) SetAllowlist(names []string) {
 
 	allowlist := make(map[string]struct{}, len(names))
 	for _, name := range names {
-		trimmed := strings.TrimSpace(name)
+		trimmed := strings.ToLower(strings.TrimSpace(name))
 		if trimmed == "" {
 			continue
 		}
@@ -172,7 +172,7 @@ func (r *ToolRegistry) toolAllowedLocked(name string) bool {
 	if r.allowlist == nil {
 		return true
 	}
-	_, ok := r.allowlist[name]
+	_, ok := r.allowlist[strings.ToLower(strings.TrimSpace(name))]
 	return ok
 }
 

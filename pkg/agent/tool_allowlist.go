@@ -3,17 +3,15 @@ package agent
 import (
 	"sort"
 	"strings"
-
-	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-func resolveAgentToolAllowlist(agentCfg *config.AgentConfig) []string {
-	if agentCfg == nil || agentCfg.Tools == nil {
+func resolveAgentToolAllowlist(definition AgentContextDefinition) []string {
+	if definition.Agent == nil || definition.Agent.Frontmatter.Tools == nil {
 		return nil
 	}
 
-	allowlist := make(map[string]struct{}, len(agentCfg.Tools))
-	for _, raw := range agentCfg.Tools {
+	allowlist := make(map[string]struct{}, len(definition.Agent.Frontmatter.Tools))
+	for _, raw := range definition.Agent.Frontmatter.Tools {
 		trimmed := strings.ToLower(strings.TrimSpace(raw))
 		if trimmed == "" {
 			continue

@@ -63,7 +63,9 @@ func NewAgentInstance(
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
 
-	model := resolveAgentModel(agentCfg, defaults)
+	definition := loadAgentDefinition(workspace)
+
+	model := resolveAgentModel(agentCfg, defaults, definition)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 
 	restrict := defaults.RestrictToWorkspace
@@ -72,7 +74,7 @@ func NewAgentInstance(
 	// Compile path whitelist patterns from config.
 	allowReadPaths := buildAllowReadPatterns(cfg)
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
-	agentToolAllowlist := resolveAgentToolAllowlist(agentCfg)
+	agentToolAllowlist := resolveAgentToolAllowlist(definition)
 
 	toolsRegistry := tools.NewToolRegistry()
 	toolsRegistry.SetAllowlist(agentToolAllowlist)
@@ -125,8 +127,11 @@ func NewAgentInstance(
 	if agentCfg != nil {
 		agentID = routing.NormalizeAgentID(agentCfg.ID)
 		agentName = agentCfg.Name
+		if definition.Agent != nil && strings.TrimSpace(definition.Agent.Frontmatter.Name) != "" {
+			agentName = strings.TrimSpace(definition.Agent.Frontmatter.Name)
+		}
 		subagents = agentCfg.Subagents
-		skillsFilter = agentCfg.Skills
+		skillsFilter = resolveAgentSkillsFilter(agentCfg, definition)
 	}
 
 	maxIter := defaults.MaxToolIterations
@@ -255,7 +260,14 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 }
 
 // resolveAgentModel resolves the primary model for an agent.
-func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+func resolveAgentModel(
+	agentCfg *config.AgentConfig,
+	defaults *config.AgentDefaults,
+	definition AgentContextDefinition,
+) string {
+	if definition.Agent != nil && strings.TrimSpace(definition.Agent.Frontmatter.Model) != "" {
+		return strings.TrimSpace(definition.Agent.Frontmatter.Model)
+	}
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
 		return strings.TrimSpace(agentCfg.Model.Primary)
 	}
@@ -268,6 +280,19 @@ func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentD
 		return agentCfg.Model.Fallbacks
 	}
 	return defaults.ModelFallbacks
+}
+
+func resolveAgentSkillsFilter(
+	agentCfg *config.AgentConfig,
+	definition AgentContextDefinition,
+) []string {
+	if definition.Agent != nil && definition.Agent.Frontmatter.Skills != nil {
+		return append([]string(nil), definition.Agent.Frontmatter.Skills...)
+	}
+	if agentCfg == nil || agentCfg.Skills == nil {
+		return nil
+	}
+	return append([]string(nil), agentCfg.Skills...)
 }
 
 func compilePatterns(patterns []string) []*regexp.Regexp {

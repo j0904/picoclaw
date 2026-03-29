@@ -35,7 +35,7 @@ type AgentFrontmatter struct {
 	MaxTurns    *int           `json:"maxTurns,omitempty"`
 	Skills      []string       `json:"skills,omitempty"`
 	MCPServers  []string       `json:"mcpServers,omitempty"`
-	Fields      map[string]any `json:"fields,omitempty"`
+	Fields      map[string]any `json:"-"`
 }
 
 // AgentPromptDefinition represents the parsed AGENT.md or AGENTS.md prompt file.

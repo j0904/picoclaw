@@ -211,13 +211,31 @@ func TestAgentInstance_FallbackExplicitEmpty(t *testing.T) {
 }
 
 func TestNewAgentLoop_AgentToolAllowlistFiltersRuntimeTools(t *testing.T) {
+	mainWorkspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "# Agent\nMain agent.\n",
+	})
+	defer cleanupWorkspace(t, mainWorkspace)
+
+	researchWorkspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": `---
+tools: [read_file, write_file, web_search, web_fetch, message]
+skills: [deep-research]
+---
+# Agent
+
+Research agent.
+`,
+	})
+	defer cleanupWorkspace(t, researchWorkspace)
+
 	cfg := testCfg([]config.AgentConfig{
-		{ID: "main", Default: true},
+		{ID: "main", Default: true, Workspace: mainWorkspace},
 		{
-			ID:    "research",
-			Tools: []string{"read_file", "write_file", "web_search", "web_fetch", "message"},
+			ID:        "research",
+			Workspace: researchWorkspace,
 		},
 	})
+	cfg.Agents.Defaults.Workspace = mainWorkspace
 	cfg.Tools.ReadFile.Enabled = true
 	cfg.Tools.WriteFile.Enabled = true
 	cfg.Tools.ListDir.Enabled = true
@@ -251,13 +269,30 @@ func TestNewAgentLoop_AgentToolAllowlistFiltersRuntimeTools(t *testing.T) {
 }
 
 func TestNewAgentLoop_AgentToolAllowlistRequiresExactRuntimeToolNames(t *testing.T) {
+	mainWorkspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "# Agent\nMain agent.\n",
+	})
+	defer cleanupWorkspace(t, mainWorkspace)
+
+	researchWorkspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": `---
+tools: [web]
+---
+# Agent
+
+Research agent.
+`,
+	})
+	defer cleanupWorkspace(t, researchWorkspace)
+
 	cfg := testCfg([]config.AgentConfig{
-		{ID: "main", Default: true},
+		{ID: "main", Default: true, Workspace: mainWorkspace},
 		{
-			ID:    "research",
-			Tools: []string{"web"},
+			ID:        "research",
+			Workspace: researchWorkspace,
 		},
 	})
+	cfg.Agents.Defaults.Workspace = mainWorkspace
 	cfg.Tools.Web.Enabled = true
 	cfg.Tools.Web.DuckDuckGo.Enabled = true
 
