@@ -88,6 +88,30 @@ func (r *AgentRegistry) ListAgentIDs() []string {
 	return ids
 }
 
+func (r *AgentRegistry) allowedMCPServers() map[string]struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(r.agents) == 0 {
+		return nil
+	}
+
+	union := make(map[string]struct{})
+	for _, agent := range r.agents {
+		if agent == nil {
+			continue
+		}
+		if agent.MCPServerAllowlist == nil {
+			return nil
+		}
+		for serverName := range agent.MCPServerAllowlist {
+			union[serverName] = struct{}{}
+		}
+	}
+
+	return union
+}
+
 // CanSpawnSubagent checks if parentAgentID is allowed to spawn targetAgentID.
 func (r *AgentRegistry) CanSpawnSubagent(parentAgentID, targetAgentID string) bool {
 	parent, ok := r.GetAgent(parentAgentID)
