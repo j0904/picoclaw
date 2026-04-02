@@ -64,6 +64,8 @@ type WhatsAppNativeChannel struct {
 	stopping     atomic.Bool // set once Stop begins; prevents new wg.Add calls
 	wg           sync.WaitGroup
 	hasConfigFile bool       // true if config.json exists (QR code only generated if true)
+	lastQRTime   time.Time   // track last QR code generation time
+	qrMu         sync.Mutex  // protect lastQRTime
 }
 
 func NewWhatsAppNativeChannel(
@@ -81,6 +83,7 @@ func NewWhatsAppNativeChannel(
 		config:         cfg,
 		storePath:      storePath,
 		hasConfigFile:  hasConfigFile,
+		lastQRTime:     time.Now(), // Initialize to now so rate limiter works from first QR
 	}
 	return c, nil
 }
@@ -190,11 +193,22 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 							return
 						}
 						if evt.Event == "code" {
-							qrPngFile := filepath.Join(c.storePath, "qrcode.png")
-							if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
-								fmt.Printf("📱 QR code updated — scan it now: %s\n", qrPngFile)
-							} else {
-								fmt.Printf("⚠ Failed to save QR code PNG: %v\n", err)
+							// Rate limit QR code generation: only update if 30+ seconds since last
+							c.qrMu.Lock()
+							now := time.Now()
+							shouldUpdate := now.Sub(c.lastQRTime) > 30*time.Second
+							if shouldUpdate {
+								c.lastQRTime = now
+							}
+							c.qrMu.Unlock()
+							
+							if shouldUpdate {
+								qrPngFile := filepath.Join(c.storePath, "qrcode.png")
+								if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
+									fmt.Printf("📱 QR code ready — scan NOW: %s\n", qrPngFile)
+								} else {
+									fmt.Printf("⚠ Failed to save QR code PNG: %v\n", err)
+								}
 							}
 						} else {
 							fmt.Printf("✓ WhatsApp login event: %s\n", evt.Event)
