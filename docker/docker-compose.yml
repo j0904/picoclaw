@@ -4,7 +4,9 @@ services:
   #   docker compose -f docker/docker-compose.yml run --rm picoclaw-agent -m "Hello"
   # ─────────────────────────────────────────────
   picoclaw-agent:
-    image: docker.io/sipeed/picoclaw:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: picoclaw-agent
     profiles:
       - agent
@@ -12,7 +14,7 @@ services:
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/home/picoclaw/.picoclaw
     entrypoint: ["picoclaw", "agent"]
     stdin_open: true
     tty: true
@@ -22,7 +24,9 @@ services:
   #   docker compose -f docker/docker-compose.yml --profile gateway up
   # ─────────────────────────────────────────────
   picoclaw-gateway:
-    image: docker.io/sipeed/picoclaw:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: picoclaw-gateway
     restart: unless-stopped
     profiles:
@@ -31,14 +35,16 @@ services:
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/home/picoclaw/.picoclaw
 
   # ─────────────────────────────────────────────
   # PicoClaw Launcher (Web Console + Gateway)
   #   docker compose -f docker/docker-compose.yml --profile launcher up
   # ─────────────────────────────────────────────
   picoclaw-launcher:
-    image: docker.io/sipeed/picoclaw:launcher
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: picoclaw-launcher
     restart: unless-stopped
     profiles:
@@ -49,4 +55,4 @@ services:
       - "127.0.0.1:18800:18800"
       - "127.0.0.1:18790:18790"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/home/picoclaw/.picoclaw

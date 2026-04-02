@@ -329,6 +329,15 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return NewCodexCliProvider(workspace), modelID, nil
 
+	case "qwen-cli", "qwencli", "qwen-code", "qwen-acp":
+		workspace := cfg.Workspace
+		if workspace == "" {
+			workspace = "."
+		}
+		// APIBase may be a bare binary path or space-separated command+args,
+		// e.g. "npx @qwen-code/qwen-code@latest" for Windows npx users.
+		return NewQwenACPProvider(cfg.APIBase, workspace), modelID, nil
+
 	case "github-copilot", "copilot":
 		apiBase := cfg.APIBase
 		if apiBase == "" {
