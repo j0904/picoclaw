@@ -5,11 +5,14 @@ FROM golang:1.25-alpine AS builder
 
 RUN apk add --no-cache \
     gcc \
+    g++ \
     musl-dev \
     libc-dev \
     git \
     nodejs \
-    npm
+    npm \
+    olm-dev \
+    cmake
 
 RUN npm install -g pnpm
 

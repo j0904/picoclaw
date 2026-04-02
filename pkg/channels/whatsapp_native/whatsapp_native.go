@@ -201,17 +201,17 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 								c.lastQRTime = now
 							}
 							c.qrMu.Unlock()
-							
+
 							if shouldUpdate {
 								qrPngFile := filepath.Join(c.storePath, "qrcode.png")
 								if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
-									fmt.Printf("📱 QR code ready — scan NOW: %s\n", qrPngFile)
+									fmt.Printf("📱 QR code ready — scan NOW: %s [%s]\n", qrPngFile, now.Format("15:04:05.000"))
 								} else {
 									fmt.Printf("⚠ Failed to save QR code PNG: %v\n", err)
 								}
 							}
 						} else {
-							fmt.Printf("✓ WhatsApp login event: %s\n", evt.Event)
+							fmt.Printf("✓ WhatsApp login event: %s [%s]\n", evt.Event, time.Now().Format("15:04:05.000"))
 						}
 					}
 				}
