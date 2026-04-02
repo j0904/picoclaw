@@ -184,6 +184,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 			c.reconnectMu.Unlock()
 			go func() {
 				defer c.wg.Done()
+				qrGenerated := false
 				for {
 					select {
 					case <-c.runCtx.Done():
@@ -193,23 +194,17 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 							return
 						}
 						if evt.Event == "code" {
-							// Rate limit QR code generation: only update if 30+ seconds since last
-							c.qrMu.Lock()
-							now := time.Now()
-							shouldUpdate := now.Sub(c.lastQRTime) > 30*time.Second
-							if shouldUpdate {
-								c.lastQRTime = now
-							}
-							c.qrMu.Unlock()
-
-							if shouldUpdate {
+							// Generate only ONE QR code and keep it valid
+							if !qrGenerated {
+								qrGenerated = true
 								qrPngFile := filepath.Join(c.storePath, "qrcode.png")
 								if err := saveQRCodePNG(evt.Code, qrPngFile); err == nil {
-									fmt.Printf("📱 QR code ready — scan NOW: %s [%s]\n", qrPngFile, now.Format("15:04:05.000"))
+									fmt.Printf("📱 QR code ready — scan NOW: %s [%s]\n", qrPngFile, time.Now().Format("15:04:05.000"))
 								} else {
 									fmt.Printf("⚠ Failed to save QR code PNG: %v\n", err)
 								}
 							}
+							// Don't regenerate - keep waiting for scan or timeout
 						} else {
 							fmt.Printf("✓ WhatsApp login event: %s [%s]\n", evt.Event, time.Now().Format("15:04:05.000"))
 						}
