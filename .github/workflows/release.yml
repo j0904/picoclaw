@@ -87,7 +87,8 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-x86-64-linux-gnu \
             gcc-arm-linux-gnueabihf \
-            gcc-mingw-w64-x86-64
+            gcc-mingw-w64-x86-64 \
+            libolm-dev
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
