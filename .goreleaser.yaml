@@ -188,8 +188,8 @@ changelog:
 
 dockers:
   - id: picoclaw-alpine-amd64
-    ids:
-      - picoclaw-linux-amd64
+    goos: linux
+    goarch: amd64
     use: buildx
     dockerfile: docker/Dockerfile.goreleaser
     image_templates:
@@ -209,8 +209,8 @@ dockers:
       - docker/entrypoint.sh
 
   - id: picoclaw-alpine-arm64
-    ids:
-      - picoclaw-linux-arm64
+    goos: linux
+    goarch: arm64
     use: buildx
     dockerfile: docker/Dockerfile.goreleaser
     image_templates:
