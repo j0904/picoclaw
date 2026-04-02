@@ -17,11 +17,11 @@ before:
 builds:
   - id: picoclaw-linux-amd64
     env:
-      - CGO_ENABLED=1
-      - CC=x86_64-linux-gnu-gcc
+      - CGO_ENABLED=0
     tags:
       - stdjson
       - whatsapp_native
+      - goolm
     ldflags:
       - -s -w
       - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
@@ -36,11 +36,11 @@ builds:
 
   - id: picoclaw-linux-arm64
     env:
-      - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
+      - CGO_ENABLED=0
     tags:
       - stdjson
       - whatsapp_native
+      - goolm
     ldflags:
       - -s -w
       - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
@@ -55,11 +55,11 @@ builds:
 
   - id: picoclaw-windows-amd64
     env:
-      - CGO_ENABLED=1
-      - CC=x86_64-w64-mingw32-gcc
+      - CGO_ENABLED=0
     tags:
       - stdjson
       - whatsapp_native
+      - goolm
     ldflags:
       - -s -w
       - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
