@@ -1,10 +1,8 @@
 FROM alpine:3.21
 
-ARG BUILDPLATFORM
-
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY ${BUILDPLATFORM}/picoclaw /usr/local/bin/picoclaw
+COPY picoclaw /usr/local/bin/picoclaw
 COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh
