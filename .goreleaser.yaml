@@ -187,19 +187,37 @@ changelog:
       - "^test:"
 
 dockers:
-  - id: picoclaw-alpine
+  - id: picoclaw-alpine-amd64
     ids:
       - picoclaw-linux-amd64
-      - picoclaw-linux-arm64
     use: buildx
     dockerfile: docker/Dockerfile.goreleaser
     image_templates:
       - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-amd64"
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-arm64"
       - "ghcr.io/j0904/picoclaw:latest-alpine-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.description={{ .ProjectName }} - AI assistant"
+      - "--label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
+      - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.created={{ time \"2006-01-02T15:04:05Z07:00\" }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=MIT"
+    extra_files:
+      - docker/entrypoint.sh
+
+  - id: picoclaw-alpine-arm64
+    ids:
+      - picoclaw-linux-arm64
+    use: buildx
+    dockerfile: docker/Dockerfile.goreleaser
+    image_templates:
+      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-arm64"
       - "ghcr.io/j0904/picoclaw:latest-alpine-arm64"
     build_flag_templates:
-      - "--platform=linux/{{ .Arch }}"
+      - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.description={{ .ProjectName }} - AI assistant"
       - "--label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
