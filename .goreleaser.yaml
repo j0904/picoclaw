@@ -193,10 +193,6 @@ dockers:
       - picoclaw-linux-arm64
     use: buildx
     dockerfile: docker/Dockerfile.goreleaser
-    goos: linux
-    goarch:
-      - amd64
-      - arm64
     image_templates:
       - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-{{ .Arch }}"
       - "ghcr.io/j0904/picoclaw:latest-alpine-{{ .Arch }}"
