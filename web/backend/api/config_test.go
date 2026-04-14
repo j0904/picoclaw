@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -389,6 +390,57 @@ func TestHandlePatchConfig_SavesDiscordTokenFromPayload(t *testing.T) {
 	}
 	if got := decoded.(*config.DiscordSettings).Token.String(); got != "discord-test-token" {
 		t.Fatalf("discord token = %q, want %q", got, "discord-test-token")
+	}
+}
+
+func TestHandlePatchConfig_DoesNotPersistShadowRegistryAuthTokenField(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
+		"tools": {
+			"skills": {
+				"registries": {
+					"github": {
+						"_auth_token": "ghp-shadow-token"
+					}
+				}
+			}
+		}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/config status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	githubRegistry, ok := cfg.Tools.Skills.Registries.Get("github")
+	if !ok {
+		t.Fatal("github registry missing after PATCH")
+	}
+	if got := githubRegistry.AuthToken.String(); got != "ghp-shadow-token" {
+		t.Fatalf("github registry auth token = %q, want %q", got, "ghp-shadow-token")
+	}
+	if got := githubRegistry.BaseURL; got != "https://github.com" {
+		t.Fatalf("github registry base_url = %q, want %q", got, "https://github.com")
+	}
+
+	rawConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(configPath) error = %v", err)
+	}
+	if strings.Contains(string(rawConfig), "_auth_token") {
+		t.Fatalf("config.json should not persist _auth_token shadow field, got:\n%s", string(rawConfig))
 	}
 }
 

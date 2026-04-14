@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -744,11 +745,12 @@ type ExecConfig struct {
 }
 
 type SkillsToolsConfig struct {
-	ToolConfig            `                       yaml:"-"                 envPrefix:"PICOCLAW_TOOLS_SKILLS_"`
-	Registries            SkillsRegistriesConfig `yaml:",inline,omitempty"                                    json:"registries"`
-	Github                SkillsGithubConfig     `yaml:"github,omitempty"                                     json:"github"`
-	MaxConcurrentSearches int                    `yaml:"-"                                                    json:"max_concurrent_searches" env:"PICOCLAW_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
-	SearchCache           SearchCacheConfig      `yaml:"-"                                                    json:"search_cache"`
+	ToolConfig `                       yaml:"-"                    envPrefix:"PICOCLAW_TOOLS_SKILLS_"`
+	Registries SkillsRegistriesConfig `yaml:"registries,omitempty"                                    json:"registries"`
+	// Deprecated: use registries.github instead.
+	Github                SkillsGithubConfig `yaml:"github,omitempty" json:"github"`
+	MaxConcurrentSearches int                `yaml:"-"                json:"max_concurrent_searches" env:"PICOCLAW_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
+	SearchCache           SearchCacheConfig  `yaml:"-"                json:"search_cache"`
 }
 
 type MediaCleanupConfig struct {
@@ -832,25 +834,86 @@ type SearchCacheConfig struct {
 	TTLSeconds int `json:"ttl_seconds" env:"PICOCLAW_SKILLS_SEARCH_CACHE_TTL_SECONDS"`
 }
 
-type SkillsRegistriesConfig struct {
-	ClawHub ClawHubRegistryConfig `json:"clawhub" yaml:"clawhub,omitempty"`
+type SkillsRegistriesConfig []*SkillRegistryConfig
+
+func (c *SkillsRegistriesConfig) Get(name string) (SkillRegistryConfig, bool) {
+	if c == nil {
+		return SkillRegistryConfig{}, false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return SkillRegistryConfig{}, false
+	}
+	for _, registry := range *c {
+		if registry == nil || registry.Name != name {
+			continue
+		}
+		return *registry, true
+	}
+	return SkillRegistryConfig{}, false
+}
+
+func (c *SkillsRegistriesConfig) Set(name string, cfg SkillRegistryConfig) {
+	if c == nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	cfg.Name = name
+	for i, registry := range *c {
+		if registry == nil || registry.Name != name {
+			continue
+		}
+		(*c)[i] = &cfg
+		return
+	}
+	*c = append(*c, &cfg)
 }
 
 type SkillsGithubConfig struct {
-	Token SecureString `json:"token,omitzero"  yaml:"token,omitempty" env:"PICOCLAW_TOOLS_SKILLS_GITHUB_TOKEN"`
-	Proxy string       `json:"proxy,omitempty" yaml:"-"               env:"PICOCLAW_TOOLS_SKILLS_GITHUB_PROXY"`
+	BaseURL string       `json:"base_url,omitempty" yaml:"-"               env:"PICOCLAW_TOOLS_SKILLS_GITHUB_BASE_URL"`
+	Token   SecureString `json:"token,omitzero"     yaml:"token,omitempty" env:"PICOCLAW_TOOLS_SKILLS_GITHUB_TOKEN"`
+	Proxy   string       `json:"proxy,omitempty"    yaml:"-"               env:"PICOCLAW_TOOLS_SKILLS_GITHUB_PROXY"`
 }
 
-type ClawHubRegistryConfig struct {
-	Enabled         bool         `json:"enabled"             yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_ENABLED"`
-	BaseURL         string       `json:"base_url"            yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_BASE_URL"`
-	AuthToken       SecureString `json:"auth_token,omitzero" yaml:"auth_token,omitempty" env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN"`
-	SearchPath      string       `json:"search_path"         yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_SEARCH_PATH"`
-	SkillsPath      string       `json:"skills_path"         yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_SKILLS_PATH"`
-	DownloadPath    string       `json:"download_path"       yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_DOWNLOAD_PATH"`
-	Timeout         int          `json:"timeout"             yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_TIMEOUT"`
-	MaxZipSize      int          `json:"max_zip_size"        yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_MAX_ZIP_SIZE"`
-	MaxResponseSize int          `json:"max_response_size"   yaml:"-"                    env:"PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_MAX_RESPONSE_SIZE"`
+type SkillRegistryConfig struct {
+	Name      string         `json:"name,omitempty"      yaml:"-"                    env:"-"`
+	Enabled   bool           `json:"enabled"             yaml:"-"                    env:"-"`
+	BaseURL   string         `json:"base_url"            yaml:"-"                    env:"-"`
+	AuthToken SecureString   `json:"auth_token,omitzero" yaml:"auth_token,omitempty" env:"-"`
+	Param     map[string]any `json:"-"                   yaml:"-"                    env:"-"`
+}
+
+const (
+	envSkillsClawHubEnabled         = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_ENABLED"
+	envSkillsClawHubBaseURL         = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_BASE_URL"
+	envSkillsClawHubAuthToken       = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN"
+	envSkillsClawHubSearchPath      = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_SEARCH_PATH"
+	envSkillsClawHubSkillsPath      = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_SKILLS_PATH"
+	envSkillsClawHubDownloadPath    = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_DOWNLOAD_PATH"
+	envSkillsClawHubTimeout         = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_TIMEOUT"
+	envSkillsClawHubMaxZipSize      = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_MAX_ZIP_SIZE"
+	envSkillsClawHubMaxResponseSize = "PICOCLAW_SKILLS_REGISTRIES_CLAWHUB_MAX_RESPONSE_SIZE"
+	envSkillsGitHubEnabled          = "PICOCLAW_SKILLS_REGISTRIES_GITHUB_ENABLED"
+	envSkillsGitHubBaseURL          = "PICOCLAW_SKILLS_REGISTRIES_GITHUB_BASE_URL"
+	envSkillsGitHubAuthToken        = "PICOCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN"
+	envSkillsGitHubProxy            = "PICOCLAW_SKILLS_REGISTRIES_GITHUB_PROXY"
+)
+
+func (c *SkillRegistryConfig) DecodeParam(target any) error {
+	if c == nil {
+		return nil
+	}
+	if len(c.Param) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(c.Param)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, target)
 }
 
 // MCPServerConfig defines configuration for a single MCP server
@@ -1076,6 +1139,7 @@ func LoadConfig(path string) (*Config, error) {
 	if err = env.Parse(cfg); err != nil {
 		return nil, err
 	}
+	applySkillsRegistryEnvCompat(cfg)
 
 	if err = InitChannelList(cfg.Channels); err != nil {
 		return nil, err
@@ -1096,6 +1160,89 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func applySkillsRegistryEnvCompat(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+
+	registryCfg, foundClawHub := cfg.Tools.Skills.Registries.Get("clawhub")
+	if !foundClawHub {
+		registryCfg = SkillRegistryConfig{
+			Name:  "clawhub",
+			Param: map[string]any{},
+		}
+	}
+	if registryCfg.Param == nil {
+		registryCfg.Param = map[string]any{}
+	}
+
+	if raw, envSet := os.LookupEnv(envSkillsClawHubEnabled); envSet {
+		if value, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
+			registryCfg.Enabled = value
+		}
+	}
+	if value, envSet := os.LookupEnv(envSkillsClawHubBaseURL); envSet {
+		registryCfg.BaseURL = value
+	}
+	if value, envSet := os.LookupEnv(envSkillsClawHubAuthToken); envSet {
+		registryCfg.AuthToken = *NewSecureString(value)
+	}
+	if value, envSet := os.LookupEnv(envSkillsClawHubSearchPath); envSet {
+		registryCfg.Param["search_path"] = value
+	}
+	if value, envSet := os.LookupEnv(envSkillsClawHubSkillsPath); envSet {
+		registryCfg.Param["skills_path"] = value
+	}
+	if value, envSet := os.LookupEnv(envSkillsClawHubDownloadPath); envSet {
+		registryCfg.Param["download_path"] = value
+	}
+	if raw, envSet := os.LookupEnv(envSkillsClawHubTimeout); envSet {
+		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			registryCfg.Param["timeout"] = value
+		}
+	}
+	if raw, envSet := os.LookupEnv(envSkillsClawHubMaxZipSize); envSet {
+		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			registryCfg.Param["max_zip_size"] = value
+		}
+	}
+	if raw, envSet := os.LookupEnv(envSkillsClawHubMaxResponseSize); envSet {
+		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			registryCfg.Param["max_response_size"] = value
+		}
+	}
+
+	cfg.Tools.Skills.Registries.Set("clawhub", registryCfg)
+
+	githubCfg, foundGitHub := cfg.Tools.Skills.Registries.Get("github")
+	if !foundGitHub {
+		githubCfg = SkillRegistryConfig{
+			Name:  "github",
+			Param: map[string]any{},
+		}
+	}
+	if githubCfg.Param == nil {
+		githubCfg.Param = map[string]any{}
+	}
+
+	if raw, envSet := os.LookupEnv(envSkillsGitHubEnabled); envSet {
+		if value, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
+			githubCfg.Enabled = value
+		}
+	}
+	if value, envSet := os.LookupEnv(envSkillsGitHubBaseURL); envSet {
+		githubCfg.BaseURL = value
+	}
+	if value, envSet := os.LookupEnv(envSkillsGitHubAuthToken); envSet {
+		githubCfg.AuthToken = *NewSecureString(value)
+	}
+	if value, envSet := os.LookupEnv(envSkillsGitHubProxy); envSet {
+		githubCfg.Param["proxy"] = value
+	}
+
+	cfg.Tools.Skills.Registries.Set("github", githubCfg)
 }
 
 func makeBackup(path string) error {

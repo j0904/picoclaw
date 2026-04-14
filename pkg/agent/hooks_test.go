@@ -867,9 +867,26 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 		resultCh <- result{resp: resp, err: err}
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-
-	al.Steer(providers.Message{Role: "user", Content: "change direction"})
+	collectedEvents := make([]Event, 0, 8)
+	steered := false
+	deadline := time.After(3 * time.Second)
+	for !steered {
+		select {
+		case evt := <-sub.C:
+			collectedEvents = append(collectedEvents, evt)
+			if evt.Kind != EventKindToolExecEnd {
+				continue
+			}
+			payload, ok := evt.Payload.(ToolExecEndPayload)
+			if !ok || payload.Tool != "tool_one" {
+				continue
+			}
+			al.Steer(providers.Message{Role: "user", Content: "change direction"})
+			steered = true
+		case <-deadline:
+			t.Fatal("timeout waiting for tool_one to finish before steering")
+		}
+	}
 
 	select {
 	case r := <-resultCh:
@@ -880,7 +897,7 @@ func TestAgentLoop_HookRespond_SteeringSkipsRemaining(t *testing.T) {
 		t.Fatal("timeout waiting for result")
 	}
 
-	events := collectEventStream(sub.C)
+	events := append(collectedEvents, collectEventStream(sub.C)...)
 
 	skippedEvts := filterEvents(events, EventKindToolExecSkipped)
 	if len(skippedEvts) < 1 {

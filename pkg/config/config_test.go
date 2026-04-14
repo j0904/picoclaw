@@ -1754,6 +1754,86 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 	}
 }
 
+func TestLoadConfig_AppliesLegacyClawHubRegistryEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":2,"tools":{"skills":{"registries":{"clawhub":{"enabled":true,"base_url":"https://clawhub.ai"}}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	t.Setenv(envSkillsClawHubBaseURL, "https://clawhub.example.com")
+	t.Setenv(envSkillsClawHubAuthToken, "clawhub-token-from-env")
+	t.Setenv(envSkillsClawHubEnabled, "false")
+	t.Setenv(envSkillsClawHubSearchPath, "/custom/search")
+	t.Setenv(envSkillsClawHubDownloadPath, "/custom/download")
+	t.Setenv(envSkillsClawHubTimeout, "17")
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	clawhub, ok := cfg.Tools.Skills.Registries.Get("clawhub")
+	if !ok {
+		t.Fatal("clawhub registry missing")
+	}
+	if clawhub.BaseURL != "https://clawhub.example.com" {
+		t.Fatalf("BaseURL = %q, want %q", clawhub.BaseURL, "https://clawhub.example.com")
+	}
+	if clawhub.AuthToken.String() != "clawhub-token-from-env" {
+		t.Fatalf("AuthToken = %q, want %q", clawhub.AuthToken.String(), "clawhub-token-from-env")
+	}
+	if clawhub.Enabled {
+		t.Fatal("Enabled = true, want false")
+	}
+	if got := clawhub.Param["search_path"]; got != "/custom/search" {
+		t.Fatalf("search_path = %v, want %q", got, "/custom/search")
+	}
+	if got := clawhub.Param["download_path"]; got != "/custom/download" {
+		t.Fatalf("download_path = %v, want %q", got, "/custom/download")
+	}
+	if got := clawhub.Param["timeout"]; got != 17 {
+		t.Fatalf("timeout = %v, want %d", got, 17)
+	}
+}
+
+func TestLoadConfig_AppliesGitHubRegistryEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":2,"tools":{"skills":{"registries":{"github":{"enabled":true,"base_url":"https://github.com"}}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	t.Setenv(envSkillsGitHubBaseURL, "https://ghe.example.com/git")
+	t.Setenv(envSkillsGitHubAuthToken, "github-token-from-env")
+	t.Setenv(envSkillsGitHubEnabled, "false")
+	t.Setenv(envSkillsGitHubProxy, "http://127.0.0.1:7890")
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	github, ok := cfg.Tools.Skills.Registries.Get("github")
+	if !ok {
+		t.Fatal("github registry missing")
+	}
+	if github.BaseURL != "https://ghe.example.com/git" {
+		t.Fatalf("BaseURL = %q, want %q", github.BaseURL, "https://ghe.example.com/git")
+	}
+	if github.AuthToken.String() != "github-token-from-env" {
+		t.Fatalf("AuthToken = %q, want %q", github.AuthToken.String(), "github-token-from-env")
+	}
+	if github.Enabled {
+		t.Fatal("Enabled = true, want false")
+	}
+	if got := github.Param["proxy"]; got != "http://127.0.0.1:7890" {
+		t.Fatalf("proxy = %v, want %q", got, "http://127.0.0.1:7890")
+	}
+}
+
 func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
@@ -1948,7 +2028,7 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 			Skills: SkillsToolsConfig{
 				Github: SkillsGithubConfig{Token: *NewSecureString("github-token-xyz")},
 				Registries: SkillsRegistriesConfig{
-					ClawHub: ClawHubRegistryConfig{AuthToken: *NewSecureString("clawhub-auth-token")},
+					&SkillRegistryConfig{Name: "clawhub", AuthToken: *NewSecureString("clawhub-auth-token")},
 				},
 			},
 		},
