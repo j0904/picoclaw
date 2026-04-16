@@ -8,6 +8,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+# Ensure workspace is included for embed (go:embed requires it to exist)
+COPY workspace/ ./workspace/
+
 RUN CGO_ENABLED=0 go build -tags goolm,stdjson -ldflags="-s -w" \
       -o /usr/local/bin/picoclaw ./cmd/picoclaw
 
