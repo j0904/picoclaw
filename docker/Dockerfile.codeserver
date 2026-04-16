@@ -3,13 +3,17 @@
 # ============================================================
 FROM golang:1.25-alpine AS builder
 
+# Install coreutils for cp command used by go generate
+RUN apk add --no-cache coreutils
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-# Ensure workspace is included for embed (go:embed requires it to exist)
-COPY workspace/ ./workspace/
+
+# Run go generate to create embedded workspace before build
+RUN go generate ./cmd/picoclaw/internal/onboard/...
 
 RUN CGO_ENABLED=0 go build -tags goolm,stdjson -ldflags="-s -w" \
       -o /usr/local/bin/picoclaw ./cmd/picoclaw
