@@ -20,11 +20,6 @@ on:
         required: false
         type: boolean
         default: false
-      upload_tos:
-        description: "Upload to Volcengine TOS"
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   create-tag:
@@ -179,11 +174,3 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/picoclaw:${{ steps.tag.outputs.value }}-codeserver
             ghcr.io/${{ github.repository_owner }}/picoclaw:latest-codeserver
 
-  upload-tos:
-    name: Upload to TOS
-    needs: release
-    if: github.event_name == 'workflow_dispatch' && inputs.upload_tos
-    uses: ./.github/workflows/upload-tos.yml
-    with:
-      tag: ${{ inputs.tag }}
-    secrets: inherit
