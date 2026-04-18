@@ -1,28 +1,10 @@
 # ============================================================
-# Stage 1: build picoclaw from source
-# ============================================================
-FROM golang:1.25-alpine AS builder
-
-# Install coreutils for cp command used by go generate
-RUN apk add --no-cache coreutils
-
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-# Run go generate to create embedded workspace before build
-RUN go generate ./cmd/picoclaw/internal/onboard/...
-
-RUN CGO_ENABLED=0 go build -tags goolm,stdjson -ldflags="-s -w" \
-      -o /usr/local/bin/picoclaw ./cmd/picoclaw
-
-# ============================================================
-# Stage 2: code-server with integrated picoclaw agent
+# code-server with integrated picoclaw agent
 # Both services run simultaneously via s6-overlay (linuxserver pattern)
 # ============================================================
 FROM linuxserver/code-server:latest
+
+ARG VERSION=v1.0.1
 
 # Install runtime dependencies (linuxserver/code-server is Ubuntu/Debian-based)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -45,9 +27,22 @@ RUN npm i -g @steipete/summarize
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh && \
   uv --version
 
-# Copy picoclaw binary from builder stage
-COPY --from=builder /usr/local/bin/picoclaw /usr/local/bin/picoclaw
-RUN chmod +x /usr/local/bin/picoclaw
+# Download pre-built release binary (includes whatsapp_native support)
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64) GOARCH="x86_64" ;; \
+      aarch64) GOARCH="arm64" ;; \
+      armv7l) GOARCH="armv7" ;; \
+      armv6l) GOARCH="armv6" ;; \
+      riscv64) GOARCH="riscv64" ;; \
+      loongarch64) GOARCH="loong64" ;; \
+      *) echo "Unsupported architecture: $ARCH"; exit 1 ;; \
+    esac && \
+    curl -L -o /tmp/picoclaw.tar.gz \
+      "https://github.com/j0904/picoclaw/releases/download/${VERSION}/picoclaw_Linux_${GOARCH}.tar.gz" && \
+    tar -xzf /tmp/picoclaw.tar.gz -C /usr/local/bin picoclaw && \
+    rm /tmp/picoclaw.tar.gz && \
+    chmod +x /usr/local/bin/picoclaw
 
 # Register picoclaw as a custom s6-overlay service so it runs alongside code-server.
 # /custom-services.d/ is the linuxserver convention for co-process scripts.
