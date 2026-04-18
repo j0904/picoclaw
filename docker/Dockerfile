@@ -3,7 +3,7 @@
 # ============================================================
 FROM debian:bookworm-slim
 
-ARG VERSION=v1.0.1
+ARG VERSION=latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates tzdata curl \
@@ -20,6 +20,9 @@ RUN ARCH=$(uname -m) && \
       loongarch64) GOARCH="loong64" ;; \
       *) echo "Unsupported architecture: $ARCH"; exit 1 ;; \
     esac && \
+    if [ "$VERSION" = "latest" ]; then \
+      VERSION=$(curl -fsSL https://api.github.com/repos/j0904/picoclaw/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'); \
+    fi && \
     curl -L -o /tmp/picoclaw.tar.gz \
       "https://github.com/j0904/picoclaw/releases/download/${VERSION}/picoclaw_Linux_${GOARCH}.tar.gz" && \
     tar -xzf /tmp/picoclaw.tar.gz -C /usr/local/bin picoclaw && \
