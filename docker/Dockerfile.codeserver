@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install content summary tool (supports China mirror acceleration)
 RUN npm i -g @steipete/summarize
 
+# Install WeChat iLink plugin for weixin channel QR login support
+RUN npx -y @tencent-weixin/openclaw-weixin-cli@latest install || true
+
 # Install uv directly into /usr/local/bin (UV_INSTALL_DIR avoids $HOME ambiguity;
 # linuxserver/code-server sets $HOME=/config, not /root)
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh && \
