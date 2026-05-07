@@ -459,10 +459,13 @@ func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 	if entry, ok := c.replyTokens.LoadAndDelete(msg.ChatID); ok {
 		tokenEntry := entry.(replyTokenEntry)
 		if time.Since(tokenEntry.timestamp) < lineReplyTokenMaxAge {
-			_, _, err := c.client.WithContext(ctx).ReplyMessageWithHttpInfo(&messaging_api.ReplyMessageRequest{
+			resp, _, err := c.client.WithContext(ctx).ReplyMessageWithHttpInfo(&messaging_api.ReplyMessageRequest{
 				ReplyToken: tokenEntry.token,
 				Messages:   []messaging_api.MessageInterface{&textMsg},
 			})
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 			if err == nil {
 				logger.DebugCF("line", "Message sent via Reply API", map[string]any{
 					"chat_id": msg.ChatID,
@@ -566,6 +569,9 @@ func (c *LINEChannel) StartTyping(ctx context.Context, chatID string) (func(), e
 
 // classifySDKError maps an SDK HTTP response to the project's sentinel errors.
 func classifySDKError(resp *http.Response, err error) error {
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
 	if err == nil {
 		return nil
 	}
