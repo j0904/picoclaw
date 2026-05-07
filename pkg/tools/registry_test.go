@@ -130,6 +130,28 @@ func TestToolRegistry_AllowlistFiltersRegistrations(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_HasRegisteredIncludesHiddenTools(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetAllowlist([]string{"visible", "hidden"})
+
+	r.Register(newMockTool("visible", "visible"))
+	r.RegisterHidden(newMockTool("hidden", "hidden"))
+	r.RegisterHidden(newMockTool("blocked", "blocked"))
+
+	if !r.HasRegistered("visible") {
+		t.Fatal("expected visible tool to be registered")
+	}
+	if !r.HasRegistered("hidden") {
+		t.Fatal("expected hidden tool to be reported as registered")
+	}
+	if r.HasRegistered("blocked") {
+		t.Fatal("blocked tool should not be registered")
+	}
+	if _, ok := r.Get("hidden"); ok {
+		t.Fatal("hidden tool with zero TTL should not be callable through Get")
+	}
+}
+
 func TestToolRegistry_Get_NotFound(t *testing.T) {
 	r := NewToolRegistry()
 	_, ok := r.Get("nonexistent")

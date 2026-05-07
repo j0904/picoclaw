@@ -14,6 +14,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/mcp"
+	agenttools "github.com/sipeed/picoclaw/pkg/tools"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -132,6 +133,42 @@ func TestServerIsDeferred(t *testing.T) {
 					tt.discoveryEnabled, tt.serverDeferred, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRegisterMCPServerPromptContributorUsesActualRegisteredToolCount(t *testing.T) {
+	cb := NewContextBuilder(t.TempDir())
+	agent := &AgentInstance{ContextBuilder: cb}
+
+	registerMCPServerPromptContributor("research", agent, "github", 0, false)
+	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
+	if prompt := messages[0].Content; strings.Contains(prompt, "MCP server `github`") {
+		t.Fatalf("expected no MCP prompt when no tools were registered, got %q", prompt)
+	}
+
+	registerMCPServerPromptContributor("research", agent, "github", 2, false)
+	messages = cb.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
+	prompt := messages[0].Content
+	if !strings.Contains(prompt, "MCP server `github` is connected") {
+		t.Fatalf("expected MCP prompt for registered tools, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "It contributes 2 tool(s)") {
+		t.Fatalf("expected actual registered tool count in prompt, got %q", prompt)
+	}
+}
+
+func TestToolRegistryIncludesReportsOnlyRegisteredTools(t *testing.T) {
+	registry := agenttools.NewToolRegistry()
+	registry.SetAllowlist([]string{"mcp_github_search"})
+
+	registry.RegisterHidden(&allowlistTestTool{name: "mcp_github_search"})
+	registry.RegisterHidden(&allowlistTestTool{name: "mcp_github_create_issue"})
+
+	if !toolRegistryIncludes(registry, "mcp_github_search") {
+		t.Fatal("expected hidden registered MCP tool to be included")
+	}
+	if toolRegistryIncludes(registry, "mcp_github_create_issue") {
+		t.Fatal("blocked MCP tool should not be included")
 	}
 }
 

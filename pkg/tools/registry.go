@@ -176,6 +176,15 @@ func (r *ToolRegistry) toolAllowedLocked(name string) bool {
 	return ok
 }
 
+// HasRegistered reports whether a tool name is present in the registry,
+// including hidden tools whose TTL is currently zero.
+func (r *ToolRegistry) HasRegistered(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.tools[name]
+	return ok
+}
+
 // HiddenToolSnapshot holds a consistent snapshot of hidden tools and the
 // registry version at which it was taken. Used by BM25SearchTool cache.
 type HiddenToolSnapshot struct {
