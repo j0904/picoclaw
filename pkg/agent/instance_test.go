@@ -666,6 +666,57 @@ Use frontmatter identity.
 	}
 }
 
+func TestNewAgentInstance_UsesResolvedProviderForFrontmatterPrimaryModel(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": `---
+model: claude-frontmatter
+---
+# Agent
+`,
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				Provider:  "openai",
+				ModelName: "default-model",
+			},
+		},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "claude-frontmatter",
+				Model:     "anthropic/claude-3-7-sonnet",
+				APIKeys:   config.SimpleSecureStrings("test-anthropic-key"),
+				Workspace: workspace,
+			},
+		},
+	}
+
+	defaultProvider := &mockProvider{}
+	agent := NewAgentInstance(&config.AgentConfig{
+		ID:        "research",
+		Workspace: workspace,
+	}, &cfg.Agents.Defaults, cfg, defaultProvider)
+
+	if agent.Model != "claude-frontmatter" {
+		t.Fatalf("agent.Model = %q, want %q", agent.Model, "claude-frontmatter")
+	}
+	if len(agent.Candidates) != 1 {
+		t.Fatalf("len(agent.Candidates) = %d, want 1", len(agent.Candidates))
+	}
+	if got := agent.Candidates[0].Provider; got != "anthropic" {
+		t.Fatalf("primary candidate provider = %q, want %q", got, "anthropic")
+	}
+	if got := agent.Candidates[0].Model; got != "claude-3-7-sonnet" {
+		t.Fatalf("primary candidate model = %q, want %q", got, "claude-3-7-sonnet")
+	}
+	if agent.Provider == defaultProvider {
+		t.Fatal("expected primary provider to be resolved from model_list instead of using injected default provider")
+	}
+}
+
 func TestNewAgentInstance_InvalidFrontmatterFailsClosedForToolsAndMCPServers(t *testing.T) {
 	workspace := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---

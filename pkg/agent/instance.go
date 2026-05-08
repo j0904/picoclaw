@@ -150,6 +150,7 @@ func NewAgentInstance(
 		subagents = agentCfg.Subagents
 		skillsFilter = resolveAgentSkillsFilter(agentCfg, definition)
 	}
+	provider = resolvePrimaryProviderForAgent(cfg, workspace, agentID, model, provider)
 	warnOnUnknownAgentMCPServerDeclarations(agentID, workspace, cfg, definition)
 
 	maxIter := defaults.MaxToolIterations
@@ -303,6 +304,47 @@ func populateCandidateProvidersFromNames(
 		}
 		out[key] = p
 	}
+}
+
+// resolvePrimaryProviderForAgent resolves a dedicated provider for the active
+// primary model when the model points at a model_list entry. This keeps the
+// agent's single-candidate path aligned with the selected model's own
+// provider/api_base/api_key instead of inheriting the process default provider.
+func resolvePrimaryProviderForAgent(
+	cfg *config.Config,
+	workspace string,
+	agentID string,
+	model string,
+	fallback providers.LLMProvider,
+) providers.LLMProvider {
+	model = strings.TrimSpace(model)
+	if cfg == nil || model == "" {
+		return fallback
+	}
+
+	modelCfg := lookupModelConfigByRef(cfg, model)
+	if modelCfg == nil {
+		return fallback
+	}
+	clone := *modelCfg
+	if clone.Workspace == "" {
+		clone.Workspace = workspace
+	}
+
+	resolvedProvider, _, err := providers.CreateProviderFromConfig(&clone)
+	if err != nil {
+		logger.WarnCF("agent", "Primary model provider init failed; using injected provider",
+			map[string]any{
+				"agent_id": agentID,
+				"model":    model,
+				"error":    err.Error(),
+			})
+		return fallback
+	}
+	if resolvedProvider == nil {
+		return fallback
+	}
+	return resolvedProvider
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.
