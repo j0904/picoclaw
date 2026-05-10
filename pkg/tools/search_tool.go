@@ -14,6 +14,8 @@ import (
 
 const (
 	MaxRegexPatternLength = 200
+	RegexSearchToolName   = "tool_search_tool_regex"
+	BM25SearchToolName    = "tool_search_tool_bm25"
 )
 
 type RegexSearchTool struct {
@@ -27,11 +29,19 @@ func NewRegexSearchTool(r *ToolRegistry, ttl int, maxSearchResults int) *RegexSe
 }
 
 func (t *RegexSearchTool) Name() string {
-	return "tool_search_tool_regex"
+	return RegexSearchToolName
 }
 
 func (t *RegexSearchTool) Description() string {
 	return "Search available hidden tools on-demand using a regex pattern. Returns JSON schemas of discovered tools."
+}
+
+func (t *RegexSearchTool) PromptMetadata() PromptMetadata {
+	return PromptMetadata{
+		Layer:  ToolPromptLayerCapability,
+		Slot:   ToolPromptSlotTooling,
+		Source: ToolPromptSourceDiscovery,
+	}
 }
 
 func (t *RegexSearchTool) Parameters() map[string]any {
@@ -88,11 +98,19 @@ func NewBM25SearchTool(r *ToolRegistry, ttl int, maxSearchResults int) *BM25Sear
 }
 
 func (t *BM25SearchTool) Name() string {
-	return "tool_search_tool_bm25"
+	return BM25SearchToolName
 }
 
 func (t *BM25SearchTool) Description() string {
 	return "Search available hidden tools on-demand using natural language query describing the action you need to perform. Returns JSON schemas of discovered tools."
+}
+
+func (t *BM25SearchTool) PromptMetadata() PromptMetadata {
+	return PromptMetadata{
+		Layer:  ToolPromptLayerCapability,
+		Slot:   ToolPromptSlotTooling,
+		Source: ToolPromptSourceDiscovery,
+	}
 }
 
 func (t *BM25SearchTool) Parameters() map[string]any {
@@ -276,6 +294,15 @@ func (t *BM25SearchTool) getOrBuildEngine() *bm25CachedEngine {
 	t.cacheVersion = snap.Version
 	logger.DebugCF("discovery", "BM25 engine rebuilt", map[string]any{"docs": len(docs), "version": snap.Version})
 	return cached
+}
+
+func isToolDiscoveryToolName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case BM25SearchToolName, RegexSearchToolName:
+		return true
+	default:
+		return false
+	}
 }
 
 // SearchBM25 ranks hidden tools against query using BM25 via utils.BM25Engine.

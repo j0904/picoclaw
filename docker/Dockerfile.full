@@ -1,9 +1,24 @@
 # ============================================================
-# Node.js-based runtime with full MCP support - download pre-built binary
+# Stage 1: Build the picoclaw binary
+# ============================================================
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git make
+
+WORKDIR /src
+
+# Cache dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source and build
+COPY . .
+RUN make build
+
+# ============================================================
+# Stage 2: Node.js-based runtime with full MCP support
 # ============================================================
 FROM node:24-alpine3.23
-
-ARG VERSION=latest
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -11,14 +26,7 @@ RUN apk add --no-cache \
   curl \
   git \
   python3 \
-  py3-pip \
-  nodejs \
-  npm \
-  github-cli \
-  tmux
-
-# Install content summary tool (supports China mirror acceleration)
-RUN npm i -g @steipete/summarize
+  py3-pip
 
 # Install uv and symlink to system path
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
@@ -26,25 +34,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
   ln -s /root/.local/bin/uvx /usr/local/bin/uvx && \
   uv --version
 
-# Determine architecture and download binary
-RUN ARCH=$(uname -m) && \
-    case "$ARCH" in \
-      x86_64) GOARCH="x86_64" ;; \
-      aarch64) GOARCH="arm64" ;; \
-      armv7l) GOARCH="armv7" ;; \
-      armv6l) GOARCH="armv6" ;; \
-      riscv64) GOARCH="riscv64" ;; \
-      loongarch64) GOARCH="loong64" ;; \
-      *) echo "Unsupported architecture: $ARCH"; exit 1 ;; \
-    esac && \
-    if [ "$VERSION" = "latest" ]; then \
-      VERSION=$(curl -fsSL https://api.github.com/repos/j0904/picoclaw/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'); \
-    fi && \
-    curl -L -o /tmp/picoclaw.tar.gz \
-      "https://github.com/j0904/picoclaw/releases/download/${VERSION}/picoclaw_Linux_${GOARCH}.tar.gz" && \
-    tar -xzf /tmp/picoclaw.tar.gz -C /usr/local/bin picoclaw && \
-    rm /tmp/picoclaw.tar.gz && \
-    chmod +x /usr/local/bin/picoclaw
+# Copy binary
+COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
 
 # Create picoclaw home directory
 RUN /usr/local/bin/picoclaw onboard

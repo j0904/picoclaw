@@ -11,9 +11,12 @@
       "summarize_message_threshold": 20,
       "summarize_token_percent": 75,
       "split_on_marker": false,
+      "max_llm_retries": 2,
+      "llm_retry_backoff_secs": 2,
       "tool_feedback": {
         "enabled": false,
-        "max_args_length": 300
+        "max_args_length": 300,
+        "separate_messages": false
       }
     }
   },
@@ -40,6 +43,7 @@
     },
     {
       "model_name": "gemini",
+      "_comment": "Optional: set \"tool_schema_transform\": \"simple\" for providers that reject complex tool JSON Schema.",
       "model": "antigravity/gemini-2.0-flash",
       "auth_method": "oauth"
     },
@@ -47,6 +51,11 @@
       "model_name": "deepseek",
       "model": "deepseek/deepseek-chat",
       "api_key": "sk-your-deepseek-key"
+    },
+    {
+      "model_name": "venice-uncensored",
+      "model": "venice/venice-uncensored",
+      "api_key": "your-venice-api-key"
     },
     {
       "model_name": "lmstudio-local",
@@ -284,8 +293,13 @@
         "base_url": "",
         "max_results": 0
       },
-      "duckduckgo": {
+      "provider": "auto",
+      "sogou": {
         "enabled": true,
+        "max_results": 5
+      },
+      "duckduckgo": {
+        "enabled": false,
         "max_results": 5
       },
       "perplexity": {
@@ -397,9 +411,16 @@
           "timeout": 0,
           "max_zip_size": 0,
           "max_response_size": 0
+        },
+        "github": {
+          "enabled": true,
+          "base_url": "https://github.com",
+          "auth_token": "",
+          "proxy": "http://127.0.0.1:7891"
         }
       },
       "github": {
+        "base_url": "https://github.com",
         "proxy": "http://127.0.0.1:7891",
         "token": ""
       },
@@ -436,7 +457,11 @@
       "enabled": true
     },
     "read_file": {
-      "enabled": true
+      "enabled": true,
+      "mode": "bytes"
+    },
+    "serial": {
+      "enabled": false
     },
     "send_tts": {
       "enabled": false
@@ -477,9 +502,18 @@
       "approval_timeout_ms": 60000
     }
   },
+  "events": {
+    "logging": {
+      "enabled": true,
+      "include": ["agent.*"],
+      "exclude": [],
+      "min_severity": "info",
+      "include_payload": false
+    }
+  },
   "gateway": {
     "_comment": "Default log level is set to 'fatal'. Other available options are 'debug', 'info', 'warn' and 'error'.",
-    "host": "127.0.0.1",
+    "host": "localhost",
     "port": 18790,
     "hot_reload": false,
     "log_level": "fatal"

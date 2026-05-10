@@ -191,6 +191,22 @@ func TestReadPidFileWithCheckStalePID(t *testing.T) {
 	}
 }
 
+// TestReadPidFileWithCheckInvalidFile auto-cleans malformed PID file.
+func TestReadPidFileWithCheckInvalidFile(t *testing.T) {
+	dir := tmpDir(t)
+	path := filepath.Join(dir, pidFileName)
+	os.WriteFile(path, []byte("not json"), 0o600)
+
+	data := ReadPidFileWithCheck(dir)
+	if data != nil {
+		t.Error("expected nil for malformed pid file")
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("malformed PID file should be removed")
+	}
+}
+
 // TestRemovePidFile removes the PID file for the current process.
 func TestRemovePidFile(t *testing.T) {
 	dir := tmpDir(t)
@@ -226,6 +242,80 @@ func TestRemovePidFileNonexistent(t *testing.T) {
 	dir := tmpDir(t)
 	// Should not panic or error.
 	RemovePidFile(dir)
+}
+
+func TestRemovePidFileIfPID(t *testing.T) {
+	dir := tmpDir(t)
+
+	other := PidFileData{PID: 99999999, Token: "deadbeef12345678deadbeef12345678"}
+	raw, _ := json.MarshalIndent(other, "", "  ")
+	path := filepath.Join(dir, pidFileName)
+	os.WriteFile(path, raw, 0o600)
+
+	removed := RemovePidFileIfPID(dir, 99999999)
+	if !removed {
+		t.Fatal("expected RemovePidFileIfPID to remove matching pid file")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("PID file should be removed for matching expected PID")
+	}
+}
+
+func TestRemovePidFileIfPIDMismatch(t *testing.T) {
+	dir := tmpDir(t)
+
+	other := PidFileData{PID: 99999999, Token: "deadbeef12345678deadbeef12345678"}
+	raw, _ := json.MarshalIndent(other, "", "  ")
+	path := filepath.Join(dir, pidFileName)
+	os.WriteFile(path, raw, 0o600)
+
+	removed := RemovePidFileIfPID(dir, 88888888)
+	if removed {
+		t.Fatal("expected RemovePidFileIfPID to keep non-matching pid file")
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("PID file should NOT be removed for mismatching expected PID")
+	}
+}
+
+// TestWritePidFileContainerPID1 verifies that a leftover PID file with PID 1
+// (typical container entrypoint) is treated as stale and overwritten.
+func TestWritePidFileContainerPID1(t *testing.T) {
+	dir := tmpDir(t)
+
+	stale := PidFileData{PID: 1, Token: "deadbeef12345678deadbeef12345678"}
+	raw, _ := json.MarshalIndent(stale, "", "  ")
+	os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600)
+
+	data, err := WritePidFile(dir, "127.0.0.1", 18790)
+	if err != nil {
+		t.Fatalf("WritePidFile should treat PID 1 as stale, got error: %v", err)
+	}
+	if data.PID != os.Getpid() {
+		t.Errorf("PID = %d, want %d", data.PID, os.Getpid())
+	}
+}
+
+// TestReadPidFileWithCheckContainerPID1 verifies that a leftover PID file
+// with PID 1 is treated as stale and cleaned up.
+func TestReadPidFileWithCheckContainerPID1(t *testing.T) {
+	if os.Getpid() == 1 {
+		t.Skip("test not meaningful when running as PID 1")
+	}
+	dir := tmpDir(t)
+
+	stale := PidFileData{PID: 1, Token: "deadbeef12345678deadbeef12345678"}
+	raw, _ := json.MarshalIndent(stale, "", "  ")
+	os.WriteFile(filepath.Join(dir, pidFileName), raw, 0o600)
+
+	data := ReadPidFileWithCheck(dir)
+	if data != nil {
+		t.Error("expected nil for PID 1 leftover")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, pidFileName)); !os.IsNotExist(err) {
+		t.Error("PID 1 leftover file should be removed")
+	}
 }
 
 // TestReadPidFileUnlockedInvalidJSON returns error for malformed content.

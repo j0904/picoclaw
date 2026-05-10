@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,17 +11,19 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/channels/pico"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/netbind"
 	ppid "github.com/sipeed/picoclaw/pkg/pid"
 	"github.com/sipeed/picoclaw/web/backend/utils"
 )
@@ -36,17 +39,10 @@ var gateway = struct {
 	startupDeadline     time.Time
 	logs                *LogBuffer
 	pidData             *ppid.PidFileData // pid file data read from picoclaw.pid.json
-	picoToken           string            // cached pico token from config (for proxy auth validation)
+	picoToken           string            // cached raw pico token for upstream gateway proxy injection
 }{
 	runtimeStatus: "stopped",
 	logs:          NewLogBuffer(200),
-}
-
-// refreshPicoToken updates gateway.picoToken from cfg
-func refreshPicoToken(cfg *config.Config) {
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
-	gateway.picoToken = cfg.Channels.Pico.Token.String()
 }
 
 // refreshPicoTokensLocked reads the pico token from config and caches it.
@@ -56,7 +52,16 @@ func refreshPicoTokensLocked(configPath string) {
 	if err != nil {
 		return
 	}
-	gateway.picoToken = cfg.Channels.Pico.Token.String()
+	var picoCfg config.PicoSettings
+	if bc := cfg.Channels.GetByType(config.ChannelPico); bc != nil {
+		decoded, err := bc.GetDecoded()
+		if err == nil && decoded != nil {
+			if p, ok := decoded.(*config.PicoSettings); ok {
+				picoCfg = *p
+			}
+		}
+	}
+	gateway.picoToken = picoCfg.Token.String()
 }
 
 // ensurePicoTokenCachedLocked lazily fills the in-memory pico token cache when
@@ -82,18 +87,15 @@ const (
 	tokenPrefix = "token."
 )
 
-// picoComposedToken returns "pico-"+pidToken+picoToken for gateway auth.
-func picoComposedToken(token string) string {
+// picoGatewayProtocol returns the gateway-facing pico subprotocol that the
+// launcher should inject when proxying browser traffic upstream.
+func picoGatewayProtocol() string {
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
-	// if not initial pico token, don't allow gateway auth
-	if gateway.picoToken == "" || gateway.pidData == nil {
+	if gateway.picoToken == "" {
 		return ""
 	}
-	if tokenPrefix+gateway.picoToken != token {
-		return ""
-	}
-	return pico.PicoTokenPrefix + gateway.pidData.Token + gateway.picoToken
+	return tokenPrefix + gateway.picoToken
 }
 
 var (
@@ -101,12 +103,15 @@ var (
 	gatewayRestartGracePeriod     = 5 * time.Second
 	gatewayRestartForceKillWindow = 3 * time.Second
 	gatewayRestartPollInterval    = 100 * time.Millisecond
+	gatewayExecCommand            = exec.Command
 )
 
 var gatewayHealthGet = func(url string, timeout time.Duration) (*http.Response, error) {
 	client := http.Client{Timeout: timeout}
 	return client.Get(url)
 }
+
+var gatewayProcessMatcher = isLikelyGatewayProcess
 
 // getGatewayHealth checks the gateway health endpoint and returns the status response.
 // Returns (*health.StatusResponse, statusCode, error). If error is not nil, the other values are not valid.
@@ -117,7 +122,7 @@ func (h *Handler) getGatewayHealth(cfg *config.Config, timeout time.Duration) (*
 	gateway.mu.Lock()
 	if d := gateway.pidData; d != nil && d.Port > 0 {
 		port = d.Port
-		host = d.Host
+		host = gatewayProbeHost(d.Host)
 	}
 	gateway.mu.Unlock()
 	if port == 0 {
@@ -150,6 +155,150 @@ func getGatewayHealthByURL(url string, timeout time.Duration) (*health.StatusRes
 	return &healthResponse, resp.StatusCode, nil
 }
 
+// isLikelyGatewayProcess returns whether PID appears to be a picoclaw gateway
+// process plus whether inspection was conclusive on this platform/environment.
+func isLikelyGatewayProcess(pid int) (bool, bool) {
+	if pid <= 0 {
+		return false, true
+	}
+
+	if runtime.GOOS == "windows" {
+		psCmd := fmt.Sprintf(
+			`$p=Get-CimInstance Win32_Process -Filter "ProcessId = %d"; if ($null -eq $p) { "" } else { $p.CommandLine }`,
+			pid,
+		)
+		out, err := launcherExecCommand("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd).Output()
+		if err == nil {
+			cmdline := strings.TrimSpace(string(out))
+			if cmdline != "" {
+				return looksLikeGatewayCommandLine(cmdline), true
+			}
+		}
+
+		// Fallback: determine only whether the process still exists.
+		out, err = launcherExecCommand("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/FO", "CSV", "/NH").Output()
+		if err != nil {
+			return false, false
+		}
+		line := strings.ToLower(strings.TrimSpace(string(out)))
+		if line == "" {
+			return false, true
+		}
+		// A CSV row means the process exists, but may have a custom executable
+		// name we cannot classify here.
+		if strings.HasPrefix(line, "\"") {
+			if strings.Contains(line, "\"picoclaw.exe\"") {
+				return true, true
+			}
+			return false, true
+		}
+		if strings.Contains(line, "no tasks are running") {
+			return false, true
+		}
+		return false, true
+	}
+
+	out, err := launcherExecCommand("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return false, false
+	}
+	cmdline := strings.ToLower(strings.TrimSpace(string(out)))
+	if cmdline == "" {
+		return false, true
+	}
+	return looksLikeGatewayCommandLine(cmdline), true
+}
+
+// looksLikeGatewayCommandLine checks whether a process command line likely
+// represents "picoclaw gateway ..." regardless of executable filename.
+func looksLikeGatewayCommandLine(cmdline string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(cmdline)))
+	if len(fields) == 0 {
+		return false
+	}
+	for _, f := range fields {
+		token := strings.Trim(f, `"'`)
+		if token == "gateway" || strings.HasSuffix(token, "/gateway") || strings.HasSuffix(token, `\gateway`) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) getGatewayHealthForPidData(
+	pidData *ppid.PidFileData,
+	cfg *config.Config,
+	timeout time.Duration,
+) (*health.StatusResponse, int, error) {
+	if pidData == nil {
+		return nil, 0, errors.New("nil pid data")
+	}
+
+	port := pidData.Port
+	if port == 0 {
+		port = 18790
+		if cfg != nil && cfg.Gateway.Port != 0 {
+			port = cfg.Gateway.Port
+		}
+	}
+
+	host := gatewayProbeHost(strings.TrimSpace(pidData.Host))
+	if host == "" {
+		host = gatewayProbeHost(h.effectiveGatewayBindHost(cfg))
+	}
+	if host == "" {
+		host = netbind.ResolveAdaptiveLoopbackHost()
+	}
+
+	url := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/health"
+	return getGatewayHealthByURL(url, timeout)
+}
+
+func (h *Handler) validateGatewayPidData(
+	pidData *ppid.PidFileData,
+	cfg *config.Config,
+) (ok bool, decisive bool, reason string) {
+	if pidData == nil || pidData.PID <= 0 {
+		return false, true, "invalid pid data"
+	}
+
+	if gatewayProcess, inspected := gatewayProcessMatcher(pidData.PID); inspected {
+		if !gatewayProcess {
+			return false, true, "pid process command is not picoclaw gateway"
+		}
+		return true, true, ""
+	}
+
+	healthResp, statusCode, err := h.getGatewayHealthForPidData(pidData, cfg, 800*time.Millisecond)
+	if err != nil {
+		return false, false, fmt.Sprintf("health probe failed: %v", err)
+	}
+	if statusCode != http.StatusOK {
+		return false, false, fmt.Sprintf("health endpoint returned status %d", statusCode)
+	}
+	if healthResp.PID > 0 && healthResp.PID != pidData.PID {
+		return false, true, fmt.Sprintf("health pid mismatch: pidFile=%d, health=%d", pidData.PID, healthResp.PID)
+	}
+	return true, true, ""
+}
+
+func (h *Handler) sanitizeGatewayPidData(pidData *ppid.PidFileData, cfg *config.Config) *ppid.PidFileData {
+	if pidData == nil {
+		return nil
+	}
+
+	ok, decisive, reason := h.validateGatewayPidData(pidData, cfg)
+	if ok {
+		return pidData
+	}
+
+	logger.Warnf("ignore pid file for PID %d: %s", pidData.PID, reason)
+	if decisive && ppid.RemovePidFileIfPID(globalConfigDir(), pidData.PID) {
+		logger.Warnf("removed stale pid file for PID %d", pidData.PID)
+	}
+	return nil
+}
+
 // registerGatewayRoutes binds gateway lifecycle endpoints to the ServeMux.
 func (h *Handler) registerGatewayRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/gateway/status", h.handleGatewayStatus)
@@ -164,7 +313,7 @@ func (h *Handler) registerGatewayRoutes(mux *http.ServeMux) {
 // starts it when possible. Intended to be called by the backend at startup.
 func (h *Handler) TryAutoStartGateway() {
 	// Check PID file first to detect an already-running gateway.
-	pidData := ppid.ReadPidFileWithCheck(globalConfigDir())
+	pidData := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil)
 	if pidData != nil {
 		gateway.mu.Lock()
 		ready, reason, err := h.gatewayStartReady()
@@ -233,6 +382,9 @@ func (h *Handler) gatewayStartReady() (bool, string, error) {
 	if modelCfg == nil {
 		return false, fmt.Sprintf("default model %q is invalid", modelName), nil
 	}
+	if !defaultModelAllowedForModelConfig(modelCfg) {
+		return false, fmt.Sprintf("default model %q is not usable for chat", modelName), nil
+	}
 
 	if !hasModelConfiguration(modelCfg) {
 		return false, fmt.Sprintf("default model %q has no credentials configured", modelName), nil
@@ -285,6 +437,10 @@ func computeConfigSignature(cfg *config.Config) string {
 	}
 	if cfg.Tools.Web.Enabled {
 		toolSignatures = append(toolSignatures, "web")
+		webConfig, err := json.Marshal(canonicalizeSignatureValue(reflect.ValueOf(cfg.Tools.Web)))
+		if err == nil {
+			parts = append(parts, "webcfg:"+string(webConfig))
+		}
 	}
 	if cfg.Tools.WebFetch.Enabled {
 		toolSignatures = append(toolSignatures, "web_fetch")
@@ -328,7 +484,173 @@ func computeConfigSignature(cfg *config.Config) string {
 	if len(toolSignatures) > 0 {
 		parts = append(parts, "tools:"+strings.Join(toolSignatures, ","))
 	}
+	channelSignatures := computeChannelSignatures(cfg.Channels)
+	if len(channelSignatures) > 0 {
+		parts = append(parts, "channels:"+strings.Join(channelSignatures, ","))
+	}
 	return strings.Join(parts, ";")
+}
+
+func computeChannelSignatures(channels config.ChannelsConfig) []string {
+	if len(channels) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(channels))
+	for name := range channels {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+
+	signatures := make([]string, 0, len(keys))
+	for _, name := range keys {
+		channel := channels[name]
+		if channel == nil {
+			signatures = append(signatures, name+":<nil>")
+			continue
+		}
+
+		payload := struct {
+			Enabled            bool                       `json:"enabled"`
+			Type               string                     `json:"type"`
+			AllowFrom          config.FlexibleStringSlice `json:"allow_from,omitempty"`
+			ReasoningChannelID string                     `json:"reasoning_channel_id,omitempty"`
+			GroupTrigger       config.GroupTriggerConfig  `json:"group_trigger,omitempty"`
+			Typing             config.TypingConfig        `json:"typing,omitempty"`
+			Placeholder        config.PlaceholderConfig   `json:"placeholder,omitempty"`
+			Settings           json.RawMessage            `json:"settings,omitempty"`
+		}{
+			Enabled:            channel.Enabled,
+			Type:               channel.Type,
+			AllowFrom:          channel.AllowFrom,
+			ReasoningChannelID: channel.ReasoningChannelID,
+			GroupTrigger:       channel.GroupTrigger,
+			Typing:             channel.Typing,
+			Placeholder:        channel.Placeholder,
+			Settings:           normalizeChannelSettings(channel),
+		}
+
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			signatures = append(signatures, name+":<invalid>")
+			continue
+		}
+		signatures = append(signatures, name+":"+string(encoded))
+	}
+
+	return signatures
+}
+
+func normalizeChannelSettings(channel *config.Channel) json.RawMessage {
+	if channel == nil {
+		return nil
+	}
+
+	decoded, err := channel.GetDecoded()
+	if err == nil && decoded != nil {
+		normalized, err := json.Marshal(canonicalizeSignatureValue(reflect.ValueOf(decoded)))
+		if err == nil {
+			return normalized
+		}
+	}
+
+	return normalizeRawJSON(channel.Settings)
+}
+
+func normalizeRawJSON(raw config.RawNode) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return bytes.TrimSpace(raw)
+	}
+
+	normalized, err := json.Marshal(value)
+	if err != nil {
+		return bytes.TrimSpace(raw)
+	}
+	return normalized
+}
+
+func canonicalizeSignatureValue(value reflect.Value) any {
+	if !value.IsValid() {
+		return nil
+	}
+
+	if value.CanInterface() {
+		switch typed := value.Interface().(type) {
+		case config.SecureString:
+			return typed.String()
+		case *config.SecureString:
+			if typed == nil {
+				return ""
+			}
+			return typed.String()
+		case config.SecureStrings:
+			return typed.Values()
+		case *config.SecureStrings:
+			if typed == nil {
+				return nil
+			}
+			return typed.Values()
+		}
+	}
+
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return nil
+		}
+		return canonicalizeSignatureValue(value.Elem())
+	case reflect.Struct:
+		result := make(map[string]any)
+		valueType := value.Type()
+		for i := 0; i < value.NumField(); i++ {
+			field := valueType.Field(i)
+			if field.PkgPath != "" {
+				continue
+			}
+			tag := field.Tag.Get("json")
+			name := field.Name
+			if tag != "" {
+				if comma := strings.Index(tag, ","); comma >= 0 {
+					tag = tag[:comma]
+				}
+				if tag == "-" {
+					continue
+				}
+				if tag != "" {
+					name = tag
+				}
+			}
+			result[name] = canonicalizeSignatureValue(value.Field(i))
+		}
+		return result
+	case reflect.Slice, reflect.Array:
+		length := value.Len()
+		result := make([]any, 0, length)
+		for i := 0; i < length; i++ {
+			result = append(result, canonicalizeSignatureValue(value.Index(i)))
+		}
+		return result
+	case reflect.Map:
+		if value.Type().Key().Kind() != reflect.String {
+			return value.Interface()
+		}
+		result := make(map[string]any, value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			result[iter.Key().String()] = canonicalizeSignatureValue(iter.Value())
+		}
+		return result
+	default:
+		if value.CanInterface() {
+			return value.Interface()
+		}
+		return nil
+	}
 }
 
 func gatewayRestartRequiredBySignature(bootSignature, currentSignature, gatewayStatus string) bool {
@@ -357,7 +679,13 @@ func isCmdProcessAliveLocked(cmd *exec.Cmd) bool {
 		return true
 	}
 
-	return cmd.Process.Signal(syscall.Signal(0)) == nil
+	err := cmd.Process.Signal(syscall.Signal(0))
+	if err == nil {
+		return true
+	}
+	var errno syscall.Errno
+	// EPERM means the process exists but cannot be signaled by this user.
+	return errors.As(err, &errno) && errno == syscall.EPERM
 }
 
 func setGatewayRuntimeStatusLocked(status string) {
@@ -401,6 +729,15 @@ func gatewayStatusWithoutHealthLocked() string {
 		return "error"
 	}
 	if gateway.runtimeStatus == "running" {
+		// For attached processes there is no waiter goroutine; degrade stale
+		// running state once the tracked process exits.
+		if !isCmdProcessAliveLocked(gateway.cmd) {
+			gateway.cmd = nil
+			gateway.owned = false
+			gateway.bootDefaultModel = ""
+			gateway.bootConfigSignature = ""
+			return "stopped"
+		}
 		return "running"
 	}
 	if gateway.runtimeStatus == "error" {
@@ -457,6 +794,11 @@ func stopGatewayLocked() (int, error) {
 	}
 
 	pid := gateway.cmd.Process.Pid
+	if !gateway.owned {
+		if isGateway, inspected := gatewayProcessMatcher(pid); inspected && !isGateway {
+			return pid, fmt.Errorf("refuse to stop non-gateway process (PID %d)", pid)
+		}
+	}
 
 	// Send SIGTERM for graceful shutdown (SIGKILL on Windows)
 	var sigErr error
@@ -539,7 +881,8 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	execPath := utils.FindPicoclawBinary()
 	logger.InfoC("gateway", fmt.Sprintf("Starting gateway process (%s)", execPath))
 
-	cmd = exec.Command(execPath, h.gatewayCommandArgs()...)
+	cmd = gatewayExecCommand(execPath, h.gatewayCommandArgs()...)
+	applyLauncherProcAttrs(cmd)
 	cmd.Env = os.Environ()
 	// Forward the launcher's config path via the environment variable that
 	// GetConfigPath() already reads, so the gateway sub-process uses the same
@@ -547,8 +890,9 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	if h.configPath != "" {
 		cmd.Env = append(cmd.Env, config.EnvConfig+"="+h.configPath)
 	}
-	if host := h.gatewayHostOverride(); host != "" {
-		cmd.Env = append(cmd.Env, config.EnvGatewayHost+"="+host)
+	gatewayHostOverride := h.gatewayHostOverride()
+	if gatewayHostOverride != "" {
+		cmd.Env = append(cmd.Env, config.EnvGatewayHost+"="+gatewayHostOverride)
 	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -565,7 +909,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	gateway.logs.Reset()
 
 	// Ensure Pico Channel is configured before starting gateway
-	changed, err := h.EnsurePicoChannel("")
+	changed, err := h.EnsurePicoChannel()
 	if err != nil {
 		logger.ErrorC("gateway", fmt.Sprintf("Warning: failed to ensure pico channel: %v", err))
 		// Non-fatal: gateway can still start without pico channel
@@ -574,6 +918,11 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 	// Already holding gateway.mu from caller.
 	if changed {
 		refreshPicoTokensLocked(h.configPath)
+		cfg, err = config.LoadConfig(h.configPath)
+		if err != nil {
+			return 0, fmt.Errorf("failed to reload config after ensuring pico channel: %w", err)
+		}
+		defaultModelName = strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -614,6 +963,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 
 	// Start a goroutine to probe pidFile and health, update runtime state once ready.
 	go func() {
+		healthConfirmed := false
 		for i := 0; i < 30; i++ { // try for up to 15 seconds
 			time.Sleep(500 * time.Millisecond)
 			gateway.mu.Lock()
@@ -628,7 +978,16 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 				gateway.mu.Lock()
 				if gateway.cmd == cmd {
 					gateway.pidData = pd
-					gateway.picoToken = cfg.Channels.Pico.Token.String()
+					var picoCfg config.PicoSettings
+					if bc := cfg.Channels.GetByType(config.ChannelPico); bc != nil {
+						decoded, err := bc.GetDecoded()
+						if err == nil && decoded != nil {
+							if p, ok := decoded.(*config.PicoSettings); ok {
+								picoCfg = *p
+							}
+						}
+					}
+					gateway.picoToken = picoCfg.Token.String()
 					setGatewayRuntimeStatusLocked("running")
 				}
 				gateway.mu.Unlock()
@@ -648,7 +1007,11 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 					setGatewayRuntimeStatusLocked("running")
 				}
 				gateway.mu.Unlock()
-				return
+				if !healthConfirmed {
+					healthConfirmed = true
+					logger.InfoC("gateway", "Gateway health endpoint reachable; waiting for pid file")
+				}
+				continue
 			}
 		}
 	}()
@@ -661,7 +1024,7 @@ func (h *Handler) startGatewayLocked(initialStatus string, existingPid int) (int
 //	POST /api/gateway/start
 func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
 	// Check PID file first to detect an already-running gateway.
-	pidData := ppid.ReadPidFileWithCheck(globalConfigDir())
+	pidData := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil)
 	if pidData != nil {
 		pid := pidData.PID
 		gateway.mu.Lock()
@@ -787,8 +1150,21 @@ func (h *Handler) RestartGateway() (int, error) {
 
 	gateway.mu.Lock()
 	previousCmd := gateway.cmd
+	previousOwned := gateway.owned
 	setGatewayRuntimeStatusLocked("restarting")
 	gateway.mu.Unlock()
+
+	if previousCmd != nil && previousCmd.Process != nil && !previousOwned {
+		if isGateway, inspected := gatewayProcessMatcher(previousCmd.Process.Pid); inspected && !isGateway {
+			logger.Warnf("refuse restarting non-gateway process (PID: %d)", previousCmd.Process.Pid)
+			gateway.mu.Lock()
+			if gateway.cmd == previousCmd {
+				setGatewayRuntimeStatusLocked("running")
+			}
+			gateway.mu.Unlock()
+			return 0, fmt.Errorf("refuse to restart non-gateway process (PID %d)", previousCmd.Process.Pid)
+		}
+	}
 
 	if err = stopGatewayProcessForRestart(previousCmd); err != nil {
 		gateway.mu.Lock()
@@ -901,7 +1277,7 @@ func (h *Handler) gatewayStatusData() map[string]any {
 	}
 
 	// Primary detection: read PID file and check if process is alive.
-	pidData := ppid.ReadPidFileWithCheck(globalConfigDir())
+	pidData := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), cfg)
 	if pidData != nil {
 		gateway.mu.Lock()
 		gateway.pidData = pidData
@@ -927,8 +1303,14 @@ func (h *Handler) gatewayStatusData() map[string]any {
 		// (startGatewayLocked) already handles liveness detection via
 		// pidFile polling and health fallback.
 		gateway.mu.Lock()
-		data["gateway_status"] = gatewayStatusWithoutHealthLocked()
-		gateway.pidData = nil
+		status := gatewayStatusWithoutHealthLocked()
+		data["gateway_status"] = status
+		// Keep last known pidData while gateway is still in a transient
+		// running state; otherwise websocket proxy may lose auth token
+		// during short pid-file races.
+		if status == "stopped" || status == "error" {
+			gateway.pidData = nil
+		}
 		gateway.mu.Unlock()
 	}
 

@@ -1,24 +1,49 @@
-.PHONY: all build install uninstall clean help test
+.PHONY: all build install uninstall clean help test build-all lint-docs
 
 # Build variables
 BINARY_NAME=picoclaw
 BUILD_DIR=build
 CMD_DIR=cmd/$(BINARY_NAME)
 MAIN_GO=$(CMD_DIR)/main.go
+EXT=
+
+ifeq ($(OS),Windows_NT)
+	POWERSHELL=powershell -NoProfile -Command
+	WINDOWS_GOARCH_RAW:=$(strip $(shell go env GOARCH 2>NUL))
+endif
 
 # Version
-VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-GIT_COMMIT=$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo "dev")
-BUILD_TIME=$(shell date +%FT%T%z)
-GO_VERSION=$(shell $(GO) version | awk '{print $$3}')
+ifeq ($(OS),Windows_NT)
+	VERSION_RAW:=$(strip $(shell git describe --tags --always --dirty 2>NUL))
+	GIT_COMMIT_RAW:=$(strip $(shell git rev-parse --short=8 HEAD 2>NUL))
+	BUILD_TIME_RAW:=$(strip $(shell powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK'"))
+	GO_VERSION_RAW:=$(strip $(shell go env GOVERSION 2>NUL))
+else
+	VERSION_RAW:=$(strip $(shell git describe --tags --always --dirty 2>/dev/null))
+	GIT_COMMIT_RAW:=$(strip $(shell git rev-parse --short=8 HEAD 2>/dev/null))
+	BUILD_TIME_RAW:=$(strip $(shell date +%FT%T%z))
+	GO_VERSION_RAW:=$(strip $(shell go env GOVERSION 2>/dev/null))
+endif
+VERSION?=$(if $(VERSION_RAW),$(VERSION_RAW),dev)
+GIT_COMMIT=$(if $(GIT_COMMIT_RAW),$(GIT_COMMIT_RAW),dev)
+BUILD_TIME=$(if $(BUILD_TIME_RAW),$(BUILD_TIME_RAW),dev)
+GO_VERSION=$(if $(GO_VERSION_RAW),$(GO_VERSION_RAW),unknown)
 CONFIG_PKG=github.com/sipeed/picoclaw/pkg/config
 LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -s -w
 
 # Go variables
-GO?=CGO_ENABLED=0 go
+GO?=go
 WEB_GO?=$(GO)
+CGO_ENABLED?=0
 GO_BUILD_TAGS?=goolm,stdjson
 GOFLAGS?=-v -tags $(GO_BUILD_TAGS)
+GOCACHE?=$(CURDIR)/.cache/go-build
+GOMODCACHE?=$(CURDIR)/.cache/go-mod
+GOTOOLCHAIN?=local
+export CGO_ENABLED
+export GOCACHE
+export GOMODCACHE
+export GOTOOLCHAIN
 comma:=,
 empty:=
 space:=$(empty) $(empty)
@@ -69,9 +94,24 @@ WORKSPACE_DIR?=$(PICOCLAW_HOME)/workspace
 WORKSPACE_SKILLS_DIR=$(WORKSPACE_DIR)/skills
 BUILTIN_SKILLS_DIR=$(CURDIR)/skills
 
+LNCMD=ln -sf
+
 # OS detection
-UNAME_S:=$(shell uname -s)
-UNAME_M:=$(shell uname -m)
+ifeq ($(OS),Windows_NT)
+	UNAME_S=Windows
+	ifeq ($(WINDOWS_GOARCH_RAW),amd64)
+		UNAME_M=x86_64
+	else ifeq ($(WINDOWS_GOARCH_RAW),arm64)
+		UNAME_M=arm64
+	else ifeq ($(WINDOWS_GOARCH_RAW),386)
+		UNAME_M=x86
+	else
+		UNAME_M=$(if $(WINDOWS_GOARCH_RAW),$(WINDOWS_GOARCH_RAW),x86_64)
+	endif
+else
+	UNAME_S?=$(shell uname -s)
+	UNAME_M?=$(shell uname -m)
+endif
 
 # Platform-specific settings
 ifeq ($(UNAME_S),Linux)
@@ -93,17 +133,54 @@ ifeq ($(UNAME_S),Linux)
 	endif
 else ifeq ($(UNAME_S),Darwin)
 	PLATFORM=darwin
-	WEB_GO=CGO_ENABLED=1 go
+	WEB_GO=CGO_LDFLAGS="-mmacosx-version-min=10.11" CGO_CFLAGS="-mmacosx-version-min=10.11" CGO_ENABLED=1 go
 	ifeq ($(UNAME_M),x86_64)
-		ARCH=amd64
+		ARCH?=amd64
 	else ifeq ($(UNAME_M),arm64)
-		ARCH=arm64
+		ARCH?=arm64
 	else
-		ARCH=$(UNAME_M)
+		ARCH?=$(UNAME_M)
 	endif
 else
 	PLATFORM=$(UNAME_S)
-	ARCH=$(UNAME_M)
+	ifeq ($(UNAME_M),x86_64)
+		ARCH?=amd64
+	else
+	    ARCH?=$(UNAME_M)
+	endif
+	# Detect Windows (Git Bash / MSYS2)
+    IS_WINDOWS:=$(if $(findstring MINGW,$(UNAME_S)),yes,$(if $(findstring MSYS,$(UNAME_S)),yes,$(if $(findstring CYGWIN,$(UNAME_S)),yes,no)))
+	ifeq ($(IS_WINDOWS),yes)
+	    EXT=.exe
+	    LNCMD=cp
+	else ifeq ($(UNAME_S),windows) # failsafe for force windows build in other OS using UNAME_S=windows
+		EXT=.exe
+	endif
+
+endif
+
+ifeq ($(OS),Windows_NT)
+	PLATFORM=windows
+	ifeq ($(UNAME_M),x86_64)
+		ARCH?=amd64
+	else ifeq ($(UNAME_M),arm64)
+		ARCH?=arm64
+	else
+		ARCH?=$(UNAME_M)
+	endif
+	EXT=.exe
+endif
+
+ifneq ($(strip $(GOOS)),)
+	PLATFORM:=$(GOOS)
+endif
+
+ifneq ($(strip $(GOARCH)),)
+	ARCH:=$(GOARCH)
+endif
+
+ifeq ($(PLATFORM),windows)
+	EXT=.exe
 endif
 
 BINARY_PATH=$(BUILD_DIR)/$(BINARY_NAME)-$(PLATFORM)-$(ARCH)
@@ -114,40 +191,50 @@ all: build
 ## generate: Run generate
 generate:
 	@echo "Run generate..."
+ifeq ($(OS),Windows_NT)
+	@$(POWERSHELL) "if (Test-Path -LiteralPath './$(CMD_DIR)/workspace') { Remove-Item -LiteralPath './$(CMD_DIR)/workspace' -Recurse -Force }"
+	@$(POWERSHELL) "$$env:GOOS=''; $$env:GOARCH=''; $(GO) generate ./..."
+else
 	@rm -r ./$(CMD_DIR)/workspace 2>/dev/null || true
-	@$(GO) generate ./...
+	@GOOS=$$($(GO) env GOHOSTOS) GOARCH=$$($(GO) env GOHOSTARCH) $(GO) generate ./...
+endif
 	@echo "Run generate complete"
 
 ## build: Build the picoclaw binary for current platform
 build: generate
-	@echo "Building $(BINARY_NAME) for $(PLATFORM)/$(ARCH)..."
+	@echo "Building $(BINARY_NAME)$(EXT) for $(PLATFORM)/$(ARCH)..."
+ifeq ($(OS),Windows_NT)
+	@$(POWERSHELL) "New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)' | Out-Null"
+	@$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH)$(EXT) ./$(CMD_DIR)
+	@$(POWERSHELL) "Copy-Item -LiteralPath '$(BINARY_PATH)$(EXT)' -Destination '$(BUILD_DIR)/$(BINARY_NAME)$(EXT)' -Force"
+else
 	@mkdir -p $(BUILD_DIR)
-	@$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./$(CMD_DIR)
-	@echo "Build complete: $(BINARY_PATH)"
-	@ln -sf $(BINARY_NAME)-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/$(BINARY_NAME)
+	@GOOS=$(PLATFORM) GOARCH=$(ARCH) $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH)$(EXT) ./$(CMD_DIR)
+	@echo "Build complete: $(BINARY_PATH)$(EXT)"
+	@$(LNCMD) $(BINARY_NAME)-$(PLATFORM)-$(ARCH)$(EXT) $(BUILD_DIR)/$(BINARY_NAME)$(EXT)
+endif
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)$(EXT)"
 
 ## build-launcher: Build the picoclaw-launcher (web console) binary
 build-launcher:
 	@echo "Building picoclaw-launcher for $(PLATFORM)/$(ARCH)..."
+ifeq ($(OS),Windows_NT)
+	@$(POWERSHELL) "New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)' | Out-Null"
+	@$(MAKE) -C web build PLATFORM="$(PLATFORM)" ARCH="$(ARCH)" EXT="$(EXT)" OUTPUT="$(CURDIR)/$(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH)$(EXT)" GO_BUILD_TAGS="$(GO_BUILD_TAGS)"
+	@$(POWERSHELL) "Copy-Item -LiteralPath '$(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH)$(EXT)' -Destination '$(BUILD_DIR)/picoclaw-launcher$(EXT)' -Force"
+else
 	@mkdir -p $(BUILD_DIR)
-	@$(MAKE) -C web build \
-		OUTPUT="$(CURDIR)/$(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH)" \
+	@GOOS=$(PLATFORM) GOARCH=$(ARCH) $(MAKE) -C web build \
+		OUTPUT="$(CURDIR)/$(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH)$(EXT)" \
 		WEB_GO='$(WEB_GO)' \
 		GO_BUILD_TAGS='$(GO_BUILD_TAGS)' \
 		LDFLAGS='$(LDFLAGS)'
-	@ln -sf picoclaw-launcher-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/picoclaw-launcher
-	@echo "Build complete: $(BUILD_DIR)/picoclaw-launcher"
+	@$(LNCMD) picoclaw-launcher-$(PLATFORM)-$(ARCH)$(EXT) $(BUILD_DIR)/picoclaw-launcher$(EXT)
+endif
+	@echo "Build complete: $(BUILD_DIR)/picoclaw-launcher$(EXT)"
 
 build-launcher-frontend:
 	@$(MAKE) -C web build-frontend
-
-## build-launcher-tui: Build the picoclaw-launcher TUI binary
-build-launcher-tui:
-	@echo "Building picoclaw-launcher-tui for $(PLATFORM)/$(ARCH)..."
-	@mkdir -p $(BUILD_DIR)
-	@$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/picoclaw-launcher-tui-$(PLATFORM)-$(ARCH) ./cmd/picoclaw-launcher-tui
-	@ln -sf picoclaw-launcher-tui-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/picoclaw-launcher-tui
-	@echo "Build complete: $(BUILD_DIR)/picoclaw-launcher-tui"
 
 ## build-whatsapp-native: Build with WhatsApp native (whatsmeow) support; larger binary
 build-whatsapp-native: generate
@@ -189,11 +276,44 @@ build-linux-mipsle: generate
 	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle)
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle"
 
+## build-android-arm64: Build core for Android ARM64
+build-android-arm64: generate
+	@echo "Building for android/arm64..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=android GOARCH=arm64 $(GO) build -tags stdjson -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-android-arm64 ./$(CMD_DIR)
+	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-android-arm64"
+
+## build-launcher-android-arm64: Build launcher for Android ARM64
+build-launcher-android-arm64:
+	@echo "Building picoclaw-launcher for android/arm64..."
+	@mkdir -p $(BUILD_DIR)
+	@$(MAKE) -C web build-android-arm64 \
+		OUTPUT_ANDROID_ARM64="$(CURDIR)/$(BUILD_DIR)/picoclaw-launcher-android-arm64" \
+		GO='$(GO)' \
+		LDFLAGS='$(LDFLAGS)'
+	@echo "Build complete: $(BUILD_DIR)/picoclaw-launcher-android-arm64"
+
+## build-android-bundle: Build core and launcher for all Android architectures and package as universal zip
+build-android-bundle: generate
+	@echo "Building core for all Android architectures..."
+	@mkdir -p $(BUILD_DIR)
+	GOOS=android GOARCH=arm64 $(GO) build -tags stdjson -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-android-arm64 ./$(CMD_DIR)
+	@echo "Building launcher for Android arm64..."
+	@$(MAKE) build-launcher-android-arm64
+	@echo "Staging JNI libs..."
+	@rm -rf $(BUILD_DIR)/android-staging
+	@mkdir -p $(BUILD_DIR)/android-staging/arm64-v8a
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-android-arm64 $(BUILD_DIR)/android-staging/arm64-v8a/libpicoclaw.so
+	@cp $(BUILD_DIR)/picoclaw-launcher-android-arm64 $(BUILD_DIR)/android-staging/arm64-v8a/libpicoclaw-web.so
+	@cd $(BUILD_DIR)/android-staging && zip -r ../picoclaw-android-universal.zip .
+	@rm -rf $(BUILD_DIR)/android-staging
+	@echo "All Android builds complete: $(BUILD_DIR)/picoclaw-android-universal.zip"
+
 ## build-pi-zero: Build for Raspberry Pi Zero 2 W (32-bit and 64-bit)
 build-pi-zero: build-linux-arm build-linux-arm64
 	@echo "Pi Zero 2 W builds: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm (32-bit), $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 (64-bit)"
 
-## build-all: Build picoclaw for all platforms
+## build-all: Build the picoclaw core binary for all Makefile-managed platforms
 build-all: generate
 	@echo "Building for multiple platforms..."
 	@mkdir -p $(BUILD_DIR)
@@ -210,7 +330,7 @@ build-all: generate
 	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./$(CMD_DIR)
 	GOOS=netbsd GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-amd64 ./$(CMD_DIR)
 	GOOS=netbsd GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-arm64 ./$(CMD_DIR)
-	@echo "All builds complete"
+	@echo "Core builds complete"
 
 ## install: Install picoclaw to system and copy builtin skills
 install: build
@@ -241,7 +361,11 @@ uninstall-all:
 ## clean: Remove build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
+ifeq ($(OS),Windows_NT)
+	@$(POWERSHELL) "if (Test-Path -LiteralPath '$(BUILD_DIR)') { Remove-Item -LiteralPath '$(BUILD_DIR)' -Recurse -Force }"
+else
 	@rm -rf $(BUILD_DIR)
+endif
 	@echo "Clean complete"
 
 ## vet: Run go vet for static analysis
@@ -259,9 +383,14 @@ test: generate
 fmt:
 	@$(GOLANGCI_LINT) fmt
 
+## lint-docs: Check common documentation layout and naming conventions
+lint-docs:
+	@./scripts/lint-docs.sh
+
 ## lint: Run linters
 lint:
 	@$(GOLANGCI_LINT) run --build-tags $(GO_BUILD_TAGS)
+	@./scripts/lint-docs.sh
 
 ## fix: Fix linting issues
 fix:
@@ -277,8 +406,8 @@ update-deps:
 	@$(GO) get -u ./...
 	@$(GO) mod tidy
 
-## check: Run vet, fmt, and verify dependencies
-check: deps fmt vet test
+## check: Run deps, fmt, vet, tests, and docs consistency checks
+check: deps fmt vet test lint-docs
 
 ## run: Build and run picoclaw
 run: build
@@ -324,15 +453,33 @@ docker-clean:
 
 
 ## build-macos-app: Build PicoClaw macOS .app bundle (no terminal window)
-build-macos-app:
+build-macos-app:build-launcher
 	@echo "Building macOS .app bundle..."
 	@if [ "$(UNAME_S)" != "Darwin" ]; then \
 		echo "Error: This target is only available on macOS"; \
 		exit 1; \
 	fi
-	@cd web && $(MAKE) build && cd ..
-	@./scripts/build-macos-app.sh $(BINARY_NAME)-$(PLATFORM)-$(ARCH)
+	@./scripts/build-macos-app.sh $(PLATFORM)-$(ARCH)
 	@echo "macOS .app bundle created: $(BUILD_DIR)/PicoClaw.app"
+
+## mem: Build membench, download LOCOMO data (if needed), run benchmark, and show results
+mem:
+	@echo "Building membench..."
+	@mkdir -p $(BUILD_DIR)
+	@$(GO) build -o $(BUILD_DIR)/membench ./cmd/membench
+	@echo "Build complete: $(BUILD_DIR)/membench"
+	@if [ ! -f $(BUILD_DIR)/memdata/locomo10.json ]; then \
+		echo "Downloading LOCOMO dataset..."; \
+		mkdir -p $(BUILD_DIR)/memdata; \
+		curl -sfL "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json" \
+			-o $(BUILD_DIR)/memdata/locomo10.json && [ -s $(BUILD_DIR)/memdata/locomo10.json ] || { echo "Error: LOCOMO download failed"; exit 1; }; \
+		echo "Download complete"; \
+	else \
+		echo "LOCOMO dataset already exists, skipping download"; \
+	fi
+	@echo "Running benchmark..."
+	@rm -rf $(BUILD_DIR)/memout
+	@$(BUILD_DIR)/membench run --data $(BUILD_DIR)/memdata --out $(BUILD_DIR)/memout --budget 4000
 
 ## help: Show this help message
 help:

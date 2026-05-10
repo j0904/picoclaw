@@ -7,6 +7,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    image: docker.io/sipeed/picoclaw:latest
     container_name: picoclaw-agent
     profiles:
       - agent
@@ -14,7 +15,7 @@ services:
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/home/picoclaw/.picoclaw
+      - ./data:/root/.picoclaw
     entrypoint: ["picoclaw", "agent"]
     stdin_open: true
     tty: true
@@ -27,6 +28,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    image: docker.io/sipeed/picoclaw:latest
     container_name: picoclaw-gateway
     restart: unless-stopped
     profiles:
@@ -35,7 +37,7 @@ services:
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/home/picoclaw/.picoclaw
+      - ./data:/root/.picoclaw
 
   # ─────────────────────────────────────────────
   # PicoClaw Launcher (Web Console + Gateway)
@@ -44,15 +46,19 @@ services:
   picoclaw-launcher:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.launcher
+    image: docker.io/sipeed/picoclaw:launcher
     container_name: picoclaw-launcher
     restart: unless-stopped
     profiles:
       - launcher
     environment:
       - PICOCLAW_GATEWAY_HOST=0.0.0.0
+      # Set a fixed dashboard token instead of a random one each restart.
+      # If not set, a random token is generated and printed to the console on startup.
+      #- PICOCLAW_LAUNCHER_TOKEN=your-secret-token-here
     ports:
-      - "127.0.0.1:18800:18800"
-      - "127.0.0.1:18790:18790"
+      - "18800:18800"
+      - "18790:18790"
     volumes:
-      - ./data:/home/picoclaw/.picoclaw
+      - ./data:/root/.picoclaw

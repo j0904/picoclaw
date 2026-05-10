@@ -1,13 +1,10 @@
-name: Create Tag and Release
+name: Release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (required, e.g. v0.2.0)"
+        description: "Existing tag to release (e.g. v0.2.0)"
         required: true
         type: string
       prerelease:
@@ -20,46 +17,35 @@ on:
         required: false
         type: boolean
         default: false
+      upload_tos:
+        description: "Upload to Volcengine TOS"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
-  create-tag:
-    name: Create Git Tag
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Create and push tag
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
-          git push origin "$RELEASE_TAG"
-
   release:
     name: GoReleaser Release
-    needs: create-tag
-    if: always() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
-      id-token: write
-      attestations: write
     steps:
+      - name: Verify tag exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh api "repos/${{ github.repository }}/git/ref/tags/${{ inputs.tag }}" --silent 2>/dev/null; then
+            echo "::error::Tag '${{ inputs.tag }}' does not exist. Create it first using the 'Create Tag' workflow."
+            exit 1
+          fi
+
       - name: Checkout tag
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ inputs.tag }}
 
       - name: Setup Go from go.mod
         id: setup-go
@@ -67,13 +53,18 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Setup pnpm
-        run: corepack enable && corepack prepare pnpm@latest --activate
+          cache: pnpm
+          cache-dependency-path: web/frontend/pnpm-lock.yaml
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -87,6 +78,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install zip
+        run: sudo apt-get install -y zip
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -97,7 +98,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPOSITORY }}
           GOVERSION: ${{ steps.setup-go.outputs.go-version }}
+          INCLUDE_ANDROID_BUNDLE: "true"
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
           MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -106,7 +109,6 @@ jobs:
 
       - name: Apply release flags
         shell: bash
-        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -114,63 +116,11 @@ jobs:
             --draft=${{ inputs.draft }} \
             --prerelease=${{ inputs.prerelease }}
 
-      - name: Set release notes for tag push
-        shell: bash
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          gh release edit "$RELEASE_TAG" \
-            --draft=false \
-            --prerelease=false
-
-  docker-codeserver:
-    name: Build & Push code-server Image
+  upload-tos:
+    name: Upload to TOS
     needs: release
-    if: always() && (needs.release.result == 'success')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve release tag
-        id: tag
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.codeserver
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/picoclaw:${{ steps.tag.outputs.value }}-codeserver
-            ghcr.io/${{ github.repository_owner }}/picoclaw:latest-codeserver
-
+    if: ${{ inputs.upload_tos }}
+    uses: ./.github/workflows/upload-tos.yml
+    with:
+      tag: ${{ inputs.tag }}
+    secrets: inherit

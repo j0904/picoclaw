@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
 
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -25,6 +27,7 @@ type HookAction string
 const (
 	HookActionContinue  HookAction = "continue"
 	HookActionModify    HookAction = "modify"
+	HookActionRespond   HookAction = "respond" // Return result directly, skip tool execution. SECURITY: This bypasses ApproveTool checks, allowing hooks to return results for any tool (including sensitive ones like bash) without approval. Use with caution.
 	HookActionDenyTool  HookAction = "deny_tool"
 	HookActionAbortTurn HookAction = "abort_turn"
 	HookActionHardAbort HookAction = "hard_abort"
@@ -69,8 +72,8 @@ func NamedHook(name string, hook any) HookRegistration {
 	}
 }
 
-type EventObserver interface {
-	OnEvent(ctx context.Context, evt Event) error
+type RuntimeEventObserver interface {
+	OnRuntimeEvent(ctx context.Context, evt runtimeevents.Event) error
 }
 
 type LLMInterceptor interface {
@@ -88,13 +91,12 @@ type ToolApprover interface {
 }
 
 type LLMHookRequest struct {
-	Meta             EventMeta                  `json:"meta"`
+	Meta             HookMeta                   `json:"meta"`
+	Context          *TurnContext               `json:"context,omitempty"`
 	Model            string                     `json:"model"`
 	Messages         []providers.Message        `json:"messages,omitempty"`
 	Tools            []providers.ToolDefinition `json:"tools,omitempty"`
 	Options          map[string]any             `json:"options,omitempty"`
-	Channel          string                     `json:"channel,omitempty"`
-	ChatID           string                     `json:"chat_id,omitempty"`
 	GracefulTerminal bool                       `json:"graceful_terminal,omitempty"`
 }
 
@@ -103,6 +105,8 @@ func (r *LLMHookRequest) Clone() *LLMHookRequest {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneHookMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Messages = cloneProviderMessages(r.Messages)
 	cloned.Tools = cloneToolDefinitions(r.Tools)
 	cloned.Options = cloneStringAnyMap(r.Options)
@@ -110,11 +114,10 @@ func (r *LLMHookRequest) Clone() *LLMHookRequest {
 }
 
 type LLMHookResponse struct {
-	Meta     EventMeta              `json:"meta"`
+	Meta     HookMeta               `json:"meta"`
+	Context  *TurnContext           `json:"context,omitempty"`
 	Model    string                 `json:"model"`
 	Response *providers.LLMResponse `json:"response,omitempty"`
-	Channel  string                 `json:"channel,omitempty"`
-	ChatID   string                 `json:"chat_id,omitempty"`
 }
 
 func (r *LLMHookResponse) Clone() *LLMHookResponse {
@@ -122,16 +125,20 @@ func (r *LLMHookResponse) Clone() *LLMHookResponse {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneHookMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Response = cloneLLMResponse(r.Response)
 	return &cloned
 }
 
 type ToolCallHookRequest struct {
-	Meta      EventMeta      `json:"meta"`
-	Tool      string         `json:"tool"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	Channel   string         `json:"channel,omitempty"`
-	ChatID    string         `json:"chat_id,omitempty"`
+	Meta       HookMeta          `json:"meta"`
+	Context    *TurnContext      `json:"context,omitempty"`
+	Tool       string            `json:"tool"`
+	Arguments  map[string]any    `json:"arguments,omitempty"`
+	Channel    string            `json:"channel,omitempty"`
+	ChatID     string            `json:"chat_id,omitempty"`
+	HookResult *tools.ToolResult `json:"hook_result,omitempty"` // Result returned directly by hook (for respond action). Media is supported - see Media handling section in docs.
 }
 
 func (r *ToolCallHookRequest) Clone() *ToolCallHookRequest {
@@ -139,16 +146,18 @@ func (r *ToolCallHookRequest) Clone() *ToolCallHookRequest {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneHookMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Arguments = cloneStringAnyMap(r.Arguments)
+	cloned.HookResult = cloneToolResult(r.HookResult)
 	return &cloned
 }
 
 type ToolApprovalRequest struct {
-	Meta      EventMeta      `json:"meta"`
+	Meta      HookMeta       `json:"meta"`
+	Context   *TurnContext   `json:"context,omitempty"`
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments,omitempty"`
-	Channel   string         `json:"channel,omitempty"`
-	ChatID    string         `json:"chat_id,omitempty"`
 }
 
 func (r *ToolApprovalRequest) Clone() *ToolApprovalRequest {
@@ -156,18 +165,19 @@ func (r *ToolApprovalRequest) Clone() *ToolApprovalRequest {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneHookMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Arguments = cloneStringAnyMap(r.Arguments)
 	return &cloned
 }
 
 type ToolResultHookResponse struct {
-	Meta      EventMeta         `json:"meta"`
+	Meta      HookMeta          `json:"meta"`
+	Context   *TurnContext      `json:"context,omitempty"`
 	Tool      string            `json:"tool"`
 	Arguments map[string]any    `json:"arguments,omitempty"`
 	Result    *tools.ToolResult `json:"result,omitempty"`
 	Duration  time.Duration     `json:"duration"`
-	Channel   string            `json:"channel,omitempty"`
-	ChatID    string            `json:"chat_id,omitempty"`
 }
 
 func (r *ToolResultHookResponse) Clone() *ToolResultHookResponse {
@@ -175,13 +185,15 @@ func (r *ToolResultHookResponse) Clone() *ToolResultHookResponse {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneHookMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Arguments = cloneStringAnyMap(r.Arguments)
 	cloned.Result = cloneToolResult(r.Result)
 	return &cloned
 }
 
 type HookManager struct {
-	eventBus           *EventBus
+	runtimeEvents      runtimeevents.EventChannel
 	observerTimeout    time.Duration
 	interceptorTimeout time.Duration
 	approvalTimeout    time.Duration
@@ -190,28 +202,39 @@ type HookManager struct {
 	hooks   map[string]HookRegistration
 	ordered []HookRegistration
 
-	sub       EventSubscription
-	done      chan struct{}
-	closeOnce sync.Once
+	runtimeSub  runtimeevents.Subscription
+	runtimeDone chan struct{}
+	closeOnce   sync.Once
 }
 
-func NewHookManager(eventBus *EventBus) *HookManager {
+func NewHookManager(runtimeEvents runtimeevents.EventChannel) *HookManager {
 	hm := &HookManager{
-		eventBus:           eventBus,
+		runtimeEvents:      runtimeEvents,
 		observerTimeout:    defaultHookObserverTimeout,
 		interceptorTimeout: defaultHookInterceptorTimeout,
 		approvalTimeout:    defaultHookApprovalTimeout,
 		hooks:              make(map[string]HookRegistration),
-		done:               make(chan struct{}),
+		runtimeDone:        make(chan struct{}),
 	}
 
-	if eventBus == nil {
-		close(hm.done)
-		return hm
+	if runtimeEvents != nil {
+		sub, ch, err := runtimeEvents.SubscribeChan(context.Background(), runtimeevents.SubscribeOptions{
+			Name:   "hook-manager-observer",
+			Buffer: hookObserverBufferSize,
+		})
+		if err != nil {
+			logger.WarnCF("hooks", "Failed to subscribe runtime events for hooks", map[string]any{
+				"error": err.Error(),
+			})
+			close(hm.runtimeDone)
+		} else {
+			hm.runtimeSub = sub
+			go hm.dispatchRuntimeEvents(ch)
+		}
+	} else {
+		close(hm.runtimeDone)
 	}
 
-	hm.sub = eventBus.Subscribe(hookObserverBufferSize)
-	go hm.dispatchEvents()
 	return hm
 }
 
@@ -221,10 +244,14 @@ func (hm *HookManager) Close() {
 	}
 
 	hm.closeOnce.Do(func() {
-		if hm.eventBus != nil {
-			hm.eventBus.Unsubscribe(hm.sub.ID)
+		if hm.runtimeSub != nil {
+			if err := hm.runtimeSub.Close(); err != nil {
+				logger.WarnCF("hooks", "Failed to close runtime event hook subscription", map[string]any{
+					"error": err.Error(),
+				})
+			}
 		}
-		<-hm.done
+		<-hm.runtimeDone
 		hm.closeAllHooks()
 	})
 }
@@ -281,16 +308,16 @@ func (hm *HookManager) Unmount(name string) {
 	hm.rebuildOrdered()
 }
 
-func (hm *HookManager) dispatchEvents() {
-	defer close(hm.done)
+func (hm *HookManager) dispatchRuntimeEvents(ch <-chan runtimeevents.Event) {
+	defer close(hm.runtimeDone)
 
-	for evt := range hm.sub.C {
+	for evt := range ch {
 		for _, reg := range hm.snapshotHooks() {
-			observer, ok := reg.Hook.(EventObserver)
+			observer, ok := reg.Hook.(RuntimeEventObserver)
 			if !ok {
 				continue
 			}
-			hm.runObserver(reg.Name, observer, evt)
+			hm.runRuntimeObserver(reg.Name, observer, evt)
 		}
 	}
 }
@@ -315,6 +342,7 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if next != nil {
+				next = hm.applyBeforeLLMControls(reg.Name, current, next)
 				current = next
 			}
 		case HookActionAbortTurn, HookActionHardAbort:
@@ -357,6 +385,84 @@ func (hm *HookManager) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LL
 	return current, HookDecision{Action: HookActionContinue}
 }
 
+func (hm *HookManager) applyBeforeLLMControls(
+	hookName string,
+	current *LLMHookRequest,
+	next *LLMHookRequest,
+) *LLMHookRequest {
+	if next == nil || current == nil {
+		return next
+	}
+	if !llmHookSystemMessagesUnchanged(current.Messages, next.Messages) {
+		logger.WarnCF("hooks", "Hook attempted to modify system prompt; preserving original messages", map[string]any{
+			"hook": hookName,
+		})
+		next.Messages = cloneProviderMessages(current.Messages)
+	}
+	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
+		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
+			"hook": hookName,
+		})
+		next.Tools = cloneToolDefinitions(current.Tools)
+	}
+	return next
+}
+
+func llmHookSystemMessagesUnchanged(before, after []providers.Message) bool {
+	beforeSystem := systemMessageFingerprints(before)
+	afterSystem := systemMessageFingerprints(after)
+	return reflect.DeepEqual(beforeSystem, afterSystem)
+}
+
+type systemMessageFingerprint struct {
+	Index   int
+	Message providers.Message
+}
+
+func systemMessageFingerprints(messages []providers.Message) []systemMessageFingerprint {
+	var fingerprints []systemMessageFingerprint
+	for i, msg := range messages {
+		if msg.Role != "system" {
+			continue
+		}
+		msg = providerVisibleMessage(msg)
+		fingerprints = append(fingerprints, systemMessageFingerprint{
+			Index:   i,
+			Message: cloneProviderMessages([]providers.Message{msg})[0],
+		})
+	}
+	return fingerprints
+}
+
+func llmHookToolDefinitionsUnchanged(before, after []providers.ToolDefinition) bool {
+	return reflect.DeepEqual(providerVisibleToolDefinitions(before), providerVisibleToolDefinitions(after))
+}
+
+func providerVisibleMessage(msg providers.Message) providers.Message {
+	msg.PromptLayer = ""
+	msg.PromptSlot = ""
+	msg.PromptSource = ""
+	if len(msg.SystemParts) > 0 {
+		msg.SystemParts = append([]providers.ContentBlock(nil), msg.SystemParts...)
+		for i := range msg.SystemParts {
+			msg.SystemParts[i].PromptLayer = ""
+			msg.SystemParts[i].PromptSlot = ""
+			msg.SystemParts[i].PromptSource = ""
+		}
+	}
+	return msg
+}
+
+func providerVisibleToolDefinitions(defs []providers.ToolDefinition) []providers.ToolDefinition {
+	cloned := cloneToolDefinitions(defs)
+	for i := range cloned {
+		cloned[i].PromptLayer = ""
+		cloned[i].PromptSlot = ""
+		cloned[i].PromptSource = ""
+	}
+	return cloned
+}
+
 func (hm *HookManager) BeforeTool(
 	ctx context.Context,
 	call *ToolCallHookRequest,
@@ -382,6 +488,10 @@ func (hm *HookManager) BeforeTool(
 			if next != nil {
 				current = next
 			}
+		case HookActionRespond:
+			// Hook returns result directly, skip tool execution
+			// Carry HookResult in ToolCallHookRequest and return
+			return next, decision
 		case HookActionDenyTool, HookActionAbortTurn, HookActionHardAbort:
 			return current, decision
 		default:
@@ -487,26 +597,30 @@ func (hm *HookManager) closeAllHooks() {
 	hm.ordered = nil
 }
 
-func (hm *HookManager) runObserver(name string, observer EventObserver, evt Event) {
+func (hm *HookManager) runRuntimeObserver(
+	name string,
+	observer RuntimeEventObserver,
+	evt runtimeevents.Event,
+) {
 	ctx, cancel := context.WithTimeout(context.Background(), hm.observerTimeout)
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
-		done <- observer.OnEvent(ctx, evt)
+		done <- observer.OnRuntimeEvent(ctx, evt)
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			logger.WarnCF("hooks", "Event observer failed", map[string]any{
+			logger.WarnCF("hooks", "Runtime event observer failed", map[string]any{
 				"hook":  name,
 				"event": evt.Kind.String(),
 				"error": err.Error(),
 			})
 		}
 	case <-ctx.Done():
-		logger.WarnCF("hooks", "Event observer timed out", map[string]any{
+		logger.WarnCF("hooks", "Runtime event observer timed out", map[string]any{
 			"hook":       name,
 			"event":      evt.Kind.String(),
 			"timeout_ms": hm.observerTimeout.Milliseconds(),
@@ -774,7 +888,7 @@ func cloneLLMResponse(resp *providers.LLMResponse) *providers.LLMResponse {
 
 func cloneStringAnyMap(src map[string]any) map[string]any {
 	if len(src) == 0 {
-		return nil
+		return map[string]any{}
 	}
 
 	cloned := make(map[string]any, len(src))
@@ -792,6 +906,13 @@ func cloneToolResult(result *tools.ToolResult) *tools.ToolResult {
 	cloned := *result
 	if len(result.Media) > 0 {
 		cloned.Media = append([]string(nil), result.Media...)
+	}
+	if len(result.ArtifactTags) > 0 {
+		cloned.ArtifactTags = append([]string(nil), result.ArtifactTags...)
+	}
+	if len(result.Messages) > 0 {
+		cloned.Messages = make([]providers.Message, len(result.Messages))
+		copy(cloned.Messages, result.Messages)
 	}
 	return &cloned
 }

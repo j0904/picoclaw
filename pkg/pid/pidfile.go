@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 )
 
 const pidFileName = ".picoclaw.pid"
+
+var errInvalidPidFile = errors.New("invalid pid file")
 
 // PidFileData is the JSON structure stored in the PID file.
 type PidFileData struct {
@@ -55,7 +58,12 @@ func WritePidFile(homePath, host string, port int) (*PidFileData, error) {
 	if data, err := readPidFileUnlocked(pidPath); err == nil {
 		if os.Getpid() != data.PID {
 			logger.Infof("found pid file (PID: %d, version: %s)", data.PID, data.Version)
-			if isProcessRunning(data.PID) {
+			// PID 1 is typically init/systemd on the host or the entrypoint
+			// inside a container. When a container stops and leaves behind a
+			// PID file on a shared volume, the host's PID 1 (init) would
+			// pass the isProcessRunning check, blocking new gateway starts.
+			// Treat recorded PID 1 as always stale.
+			if data.PID != 1 && isProcessRunning(data.PID) {
 				return nil, fmt.Errorf("gateway is already running (PID: %d, version: %s)", data.PID, data.Version)
 			}
 			logger.Warnf("not running (PID: %d) so will remove the pid file: %s", data.PID, pidPath)
@@ -109,7 +117,23 @@ func ReadPidFileWithCheck(homePath string) *PidFileData {
 	pidPath := pidFilePath(homePath)
 	data, err := readPidFileUnlocked(pidPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if errors.Is(err, errInvalidPidFile) {
+			logger.Warnf("invalid pid file, remove it: %s (%v)", pidPath, err)
+			_ = os.Remove(pidPath)
+			return nil
+		}
 		logger.Debugf("failed to read pid file: %s", err)
+		return nil
+	}
+
+	// Treat PID 1 as stale when we are not PID 1 ourselves (container
+	// leftover on a shared volume — host PID 1 is init, not gateway).
+	if data.PID == 1 && os.Getpid() != 1 {
+		logger.Debugf("stale container PID 1, remove pid file: %s", pidPath)
+		os.Remove(pidPath)
 		return nil
 	}
 
@@ -140,6 +164,30 @@ func RemovePidFile(homePath string) {
 	os.Remove(pidPath)
 }
 
+// RemovePidFileIfPID deletes the PID file only when the recorded PID matches
+// expectedPID. It returns true when the file is removed successfully.
+func RemovePidFileIfPID(homePath string, expectedPID int) bool {
+	if expectedPID <= 0 {
+		return false
+	}
+
+	pidMu.Lock()
+	defer pidMu.Unlock()
+
+	pidPath := pidFilePath(homePath)
+	data, err := readPidFileUnlocked(pidPath)
+	if err != nil {
+		return false
+	}
+	if data.PID != expectedPID {
+		return false
+	}
+	if err := os.Remove(pidPath); err != nil {
+		return false
+	}
+	return true
+}
+
 // readPidFileUnlocked reads the PID file without acquiring the lock.
 // Caller must hold pidMu.
 func readPidFileUnlocked(pidPath string) (*PidFileData, error) {
@@ -150,12 +198,12 @@ func readPidFileUnlocked(pidPath string) (*PidFileData, error) {
 
 	var data PidFileData
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errInvalidPidFile, err)
 	}
 
 	// Validate PID is a positive integer.
 	if data.PID <= 0 {
-		return nil, fmt.Errorf("invalid pid in pid file: %d", data.PID)
+		return nil, fmt.Errorf("%w: pid=%d", errInvalidPidFile, data.PID)
 	}
 
 	return &data, nil

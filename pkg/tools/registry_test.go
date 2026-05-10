@@ -39,12 +39,25 @@ func (m *mockContextAwareTool) Execute(ctx context.Context, _ map[string]any) *T
 	return m.result
 }
 
+type mockPromptMetadataTool struct {
+	mockRegistryTool
+	metadata PromptMetadata
+}
+
+func (m *mockPromptMetadataTool) PromptMetadata() PromptMetadata {
+	return m.metadata
+}
+
 type mockAsyncRegistryTool struct {
 	mockRegistryTool
 	lastCB AsyncCallback
 }
 
-func (m *mockAsyncRegistryTool) ExecuteAsync(_ context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+func (m *mockAsyncRegistryTool) ExecuteAsync(
+	_ context.Context,
+	args map[string]any,
+	cb AsyncCallback,
+) *ToolResult {
 	m.lastCB = cb
 	return m.result
 }
@@ -92,6 +105,69 @@ func TestToolRegistry_RegisterAndGet(t *testing.T) {
 	}
 	if got.Name() != "echo" {
 		t.Errorf("expected name 'echo', got %q", got.Name())
+	}
+}
+
+func TestToolRegistry_AllowlistFiltersRegistrations(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetAllowlist([]string{"Allowed_Tool"})
+
+	r.Register(newMockTool("allowed_tool", "allowed"))
+	r.Register(newMockTool("blocked_tool", "blocked"))
+	r.RegisterHidden(newMockTool("hidden_blocked", "hidden blocked"))
+
+	if _, ok := r.Get("allowed_tool"); !ok {
+		t.Fatal("expected allowed_tool to be registered")
+	}
+	if _, ok := r.Get("blocked_tool"); ok {
+		t.Fatal("blocked_tool should not be registered")
+	}
+	if _, ok := r.Get("hidden_blocked"); ok {
+		t.Fatal("hidden_blocked should not be registered")
+	}
+	if got := r.List(); len(got) != 1 || got[0] != "allowed_tool" {
+		t.Fatalf("registry list = %v, want [allowed_tool]", got)
+	}
+}
+
+func TestToolRegistry_AllowlistStillAllowsDiscoveryTools(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetAllowlist([]string{"mcp_github_search"})
+
+	r.Register(newMockTool(BM25SearchToolName, "discover hidden tools"))
+	r.Register(newMockTool(RegexSearchToolName, "discover hidden tools via regex"))
+	r.Register(newMockTool("blocked_tool", "blocked"))
+
+	if _, ok := r.Get(BM25SearchToolName); !ok {
+		t.Fatal("expected BM25 discovery tool to bypass allowlist filtering")
+	}
+	if _, ok := r.Get(RegexSearchToolName); !ok {
+		t.Fatal("expected regex discovery tool to bypass allowlist filtering")
+	}
+	if _, ok := r.Get("blocked_tool"); ok {
+		t.Fatal("blocked_tool should not be registered")
+	}
+}
+
+func TestToolRegistry_HasRegisteredIncludesHiddenTools(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetAllowlist([]string{"visible", "hidden"})
+
+	r.Register(newMockTool("visible", "visible"))
+	r.RegisterHidden(newMockTool("hidden", "hidden"))
+	r.RegisterHidden(newMockTool("blocked", "blocked"))
+
+	if !r.HasRegistered("visible") {
+		t.Fatal("expected visible tool to be registered")
+	}
+	if !r.HasRegistered("hidden") {
+		t.Fatal("expected hidden tool to be reported as registered")
+	}
+	if r.HasRegistered("blocked") {
+		t.Fatal("blocked tool should not be registered")
+	}
+	if _, ok := r.Get("hidden"); ok {
+		t.Fatal("hidden tool with zero TTL should not be callable through Get")
 	}
 }
 
@@ -296,7 +372,11 @@ func TestToolRegistry_ToProviderDefs(t *testing.T) {
 		t.Errorf("Name: want %q, got %q", want.Function.Name, got.Function.Name)
 	}
 	if got.Function.Description != want.Function.Description {
-		t.Errorf("Description: want %q, got %q", want.Function.Description, got.Function.Description)
+		t.Errorf(
+			"Description: want %q, got %q",
+			want.Function.Description,
+			got.Function.Description,
+		)
 	}
 }
 
@@ -375,6 +455,47 @@ func TestToolToSchema(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_ToProviderDefsAttachesPromptMetadata(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(newMockTool("native", "native tool"))
+	r.Register(&mockPromptMetadataTool{
+		mockRegistryTool: mockRegistryTool{
+			name:   "mcp_demo",
+			desc:   "mcp tool",
+			params: map[string]any{"type": "object"},
+		},
+		metadata: PromptMetadata{
+			Layer:  ToolPromptLayerCapability,
+			Slot:   ToolPromptSlotMCP,
+			Source: "mcp:demo",
+		},
+	})
+
+	defs := r.ToProviderDefs()
+	if len(defs) != 2 {
+		t.Fatalf("ToProviderDefs() len = %d, want 2", len(defs))
+	}
+
+	byName := make(map[string]providers.ToolDefinition, len(defs))
+	for _, def := range defs {
+		byName[def.Function.Name] = def
+	}
+
+	native := byName["native"]
+	if native.PromptLayer != ToolPromptLayerCapability ||
+		native.PromptSlot != ToolPromptSlotTooling ||
+		native.PromptSource != ToolPromptSourceRegistry {
+		t.Fatalf("native prompt metadata = %#v, want default tooling source", native)
+	}
+
+	mcp := byName["mcp_demo"]
+	if mcp.PromptLayer != ToolPromptLayerCapability ||
+		mcp.PromptSlot != ToolPromptSlotMCP ||
+		mcp.PromptSource != "mcp:demo" {
+		t.Fatalf("mcp prompt metadata = %#v, want mcp source", mcp)
+	}
+}
+
 func TestToolRegistry_Clone(t *testing.T) {
 	r := NewToolRegistry()
 	r.Register(newMockTool("read_file", "reads files"))
@@ -399,7 +520,10 @@ func TestToolRegistry_Clone(t *testing.T) {
 		t.Errorf("expected parent to have 4 tools, got %d", r.Count())
 	}
 	if clone.Count() != 3 {
-		t.Errorf("expected clone to still have 3 tools after parent mutation, got %d", clone.Count())
+		t.Errorf(
+			"expected clone to still have 3 tools after parent mutation, got %d",
+			clone.Count(),
+		)
 	}
 	if _, ok := clone.Get("spawn"); ok {
 		t.Error("expected clone NOT to have 'spawn' tool registered on parent after cloning")
@@ -695,7 +819,14 @@ func TestToolRegistry_ExecuteWithContext_SanitizesLargeBase64Payload(t *testing.
 		result: SilentResult(payload),
 	})
 
-	result := r.ExecuteWithContext(context.Background(), "base64_tool", nil, "telegram", "chat-1", nil)
+	result := r.ExecuteWithContext(
+		context.Background(),
+		"base64_tool",
+		nil,
+		"telegram",
+		"chat-1",
+		nil,
+	)
 
 	if result.ForLLM != largeBase64OmittedMessage {
 		t.Fatalf("expected sanitized payload, got %q", result.ForLLM)
@@ -715,7 +846,14 @@ func TestToolRegistry_ExecuteWithContext_ExtractsInlineMediaDataURL(t *testing.T
 		result: SilentResult(payload),
 	})
 
-	result := r.ExecuteWithContext(context.Background(), "inline_media_tool", nil, "telegram", "chat-42", nil)
+	result := r.ExecuteWithContext(
+		context.Background(),
+		"inline_media_tool",
+		nil,
+		"telegram",
+		"chat-42",
+		nil,
+	)
 
 	if len(result.Media) != 1 {
 		t.Fatalf("expected 1 media ref, got %d", len(result.Media))
@@ -750,7 +888,14 @@ func TestToolRegistry_ExecuteWithContext_SanitizesInlineMediaWithoutStore(t *tes
 		result: SilentResult(payload),
 	})
 
-	result := r.ExecuteWithContext(context.Background(), "inline_media_no_store", nil, "telegram", "chat-42", nil)
+	result := r.ExecuteWithContext(
+		context.Background(),
+		"inline_media_no_store",
+		nil,
+		"telegram",
+		"chat-42",
+		nil,
+	)
 
 	if strings.Contains(result.ForLLM, "data:image/png;base64") {
 		t.Fatalf("expected inline data URL to be removed from ForLLM, got %q", result.ForLLM)

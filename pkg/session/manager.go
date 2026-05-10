@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 )
 
 type Session struct {
@@ -69,6 +70,10 @@ func (sm *SessionManager) AddMessage(sessionKey, role, content string) {
 // AddFullMessage adds a complete message with tool calls and tool call ID to the session.
 // This is used to save the full conversation flow including tool calls and tool results.
 func (sm *SessionManager) AddFullMessage(sessionKey string, msg providers.Message) {
+	if messageutil.IsTransientAssistantThoughtMessage(msg) {
+		return
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -145,6 +150,16 @@ func (sm *SessionManager) TruncateHistory(key string, keepLast int) {
 	session.Updated = time.Now()
 }
 
+func (sm *SessionManager) ListSessions() []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	keys := make([]string, 0, len(sm.sessions))
+	for k := range sm.sessions {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // sanitizeFilename converts a session key into a cross-platform safe filename.
 // Replaces ':' with '_' (session key separator) and '/' and '\' with '_' so
 // composite IDs (e.g. Telegram forum "chatID/threadID") do not create
@@ -186,8 +201,7 @@ func (sm *SessionManager) Save(key string) error {
 		Updated: stored.Updated,
 	}
 	if len(stored.Messages) > 0 {
-		snapshot.Messages = make([]providers.Message, len(stored.Messages))
-		copy(snapshot.Messages, stored.Messages)
+		snapshot.Messages = messageutil.FilterInvalidHistoryMessages(stored.Messages)
 	} else {
 		snapshot.Messages = []providers.Message{}
 	}
@@ -260,6 +274,7 @@ func (sm *SessionManager) loadSessions() error {
 		if err := json.Unmarshal(data, &session); err != nil {
 			continue
 		}
+		session.Messages = messageutil.FilterInvalidHistoryMessages(session.Messages)
 
 		sm.sessions[session.Key] = &session
 	}
@@ -280,6 +295,7 @@ func (sm *SessionManager) SetHistory(key string, history []providers.Message) {
 
 	session, ok := sm.sessions[key]
 	if ok {
+		history = messageutil.FilterInvalidHistoryMessages(history)
 		// Create a deep copy to strictly isolate internal state
 		// from the caller's slice.
 		msgs := make([]providers.Message, len(history))

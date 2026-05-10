@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
@@ -33,9 +35,12 @@ type (
 type Provider struct {
 	apiKey         string
 	apiBase        string
+	providerName   string
 	maxTokensField string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
 	httpClient     *http.Client
 	extraBody      map[string]any // Additional fields to inject into request body
+	customHeaders  map[string]string
+	userAgent      string
 }
 
 type Option func(*Provider)
@@ -44,6 +49,7 @@ const defaultRequestTimeout = common.DefaultRequestTimeout
 
 var stripModelPrefixProviders = map[string]struct{}{
 	"litellm":    {},
+	"venice":     {},
 	"moonshot":   {},
 	"nvidia":     {},
 	"groq":       {},
@@ -65,6 +71,12 @@ func WithMaxTokensField(maxTokensField string) Option {
 	}
 }
 
+func WithUserAgent(userAgent string) Option {
+	return func(p *Provider) {
+		p.userAgent = userAgent
+	}
+}
+
 func WithRequestTimeout(timeout time.Duration) Option {
 	return func(p *Provider) {
 		if timeout > 0 {
@@ -76,6 +88,18 @@ func WithRequestTimeout(timeout time.Duration) Option {
 func WithExtraBody(extraBody map[string]any) Option {
 	return func(p *Provider) {
 		p.extraBody = extraBody
+	}
+}
+
+func WithCustomHeaders(customHeaders map[string]string) Option {
+	return func(p *Provider) {
+		p.customHeaders = customHeaders
+	}
+}
+
+func WithProviderName(providerName string) Option {
+	return func(p *Provider) {
+		p.providerName = strings.ToLower(strings.TrimSpace(providerName))
 	}
 }
 
@@ -120,7 +144,7 @@ func (p *Provider) buildRequestBody(
 
 	requestBody := map[string]any{
 		"model":    model,
-		"messages": common.SerializeMessages(messages),
+		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
 	}
 
 	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
@@ -166,11 +190,127 @@ func (p *Provider) buildRequestBody(
 
 	// Merge extra body fields configured per-provider/model.
 	// These are injected last so they take precedence over defaults.
-	for k, v := range p.extraBody {
-		requestBody[k] = v
-	}
+	maps.Copy(requestBody, p.extraBody)
 
 	return requestBody
+}
+
+func (p *Provider) applyCustomHeaders(req *http.Request) {
+	for k, v := range p.customHeaders {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+}
+
+func (p *Provider) SetProviderName(providerName string) {
+	p.providerName = strings.ToLower(strings.TrimSpace(providerName))
+}
+
+func (p *Provider) prepareMessagesForRequest(messages []Message) []Message {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	if p.isDeepSeekReasoningProvider() {
+		return filterDeepSeekReasoningMessages(messages)
+	}
+	return stripReasoningMessages(messages)
+}
+
+func (p *Provider) isDeepSeekReasoningProvider() bool {
+	return p.providerName == "deepseek" || isDeepSeekHost(p.apiBase)
+}
+
+func isDeepSeekHost(apiBase string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(apiBase))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return host == "deepseek.com" || strings.HasSuffix(host, ".deepseek.com")
+}
+
+func filterDeepSeekReasoningMessages(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	start := 0
+
+	flush := func(end int) {
+		if end <= start {
+			return
+		}
+		out = append(out, filterDeepSeekReasoningTurn(messages[start:end])...)
+		start = end
+	}
+
+	for i := 1; i < len(messages); i++ {
+		if messages[i].Role == "user" {
+			flush(i)
+		}
+	}
+	flush(len(messages))
+
+	return out
+}
+
+func filterDeepSeekReasoningTurn(messages []Message) []Message {
+	hasToolInteraction := false
+	for _, msg := range messages {
+		if msg.Role == "tool" || (msg.Role == "assistant" && len(msg.ToolCalls) > 0) {
+			hasToolInteraction = true
+			break
+		}
+	}
+
+	out := make([]Message, 0, len(messages))
+	for _, msg := range messages {
+		if messageutil.IsTransientAssistantThoughtMessage(msg) {
+			continue
+		}
+
+		cloned := msg
+		// DeepSeek thinking-mode replay only requires reasoning_content for
+		// turns that participate in a tool interaction round. For plain
+		// assistant turns between two user messages, the docs say the API will
+		// ignore reasoning_content on replay, so we strip it here.
+		if cloned.Role == "assistant" && strings.TrimSpace(cloned.ReasoningContent) != "" && !hasToolInteraction {
+			cloned.ReasoningContent = ""
+		}
+		if assistantMessageEmpty(cloned) {
+			continue
+		}
+		out = append(out, cloned)
+	}
+
+	return out
+}
+
+func stripReasoningMessages(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for _, msg := range messages {
+		if messageutil.IsTransientAssistantThoughtMessage(msg) {
+			continue
+		}
+
+		cloned := msg
+		cloned.ReasoningContent = ""
+		if assistantMessageEmpty(cloned) {
+			continue
+		}
+		out = append(out, cloned)
+	}
+	return out
+}
+
+func assistantMessageEmpty(msg Message) bool {
+	return msg.Role == "assistant" &&
+		strings.TrimSpace(msg.Content) == "" &&
+		strings.TrimSpace(msg.ReasoningContent) == "" &&
+		len(msg.ToolCalls) == 0 &&
+		len(msg.Media) == 0 &&
+		len(msg.Attachments) == 0 &&
+		strings.TrimSpace(msg.ToolCallID) == ""
 }
 
 func (p *Provider) Chat(
@@ -197,9 +337,13 @@ func (p *Provider) Chat(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if p.userAgent != "" {
+		req.Header.Set("User-Agent", p.userAgent)
+	}
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
+	p.applyCustomHeaders(req)
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -243,9 +387,13 @@ func (p *Provider) ChatStream(
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	if p.userAgent != "" {
+		req.Header.Set("User-Agent", p.userAgent)
+	}
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
+	p.applyCustomHeaders(req)
 
 	// Use a client without Timeout for streaming — the http.Client.Timeout covers
 	// the entire request lifecycle including body reads, which would kill long streams.
@@ -439,7 +587,9 @@ func (p *Provider) SupportsNativeSearch() bool {
 	return isNativeSearchHost(p.apiBase)
 }
 
-func isNativeSearchHost(apiBase string) bool {
+// isNativeOpenAIOrAzureEndpoint reports whether the given API base points to
+// OpenAI's own API or an Azure OpenAI deployment.
+func isNativeOpenAIOrAzureEndpoint(apiBase string) bool {
 	u, err := url.Parse(apiBase)
 	if err != nil {
 		return false
@@ -448,15 +598,14 @@ func isNativeSearchHost(apiBase string) bool {
 	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
 }
 
+func isNativeSearchHost(apiBase string) bool {
+	return isNativeOpenAIOrAzureEndpoint(apiBase)
+}
+
 // supportsPromptCacheKey reports whether the given API base is known to
 // support the prompt_cache_key request field. Currently only OpenAI's own
 // API and Azure OpenAI support this. All other OpenAI-compatible providers
 // (Mistral, Gemini, DeepSeek, Groq, etc.) reject unknown fields with 422 errors.
 func supportsPromptCacheKey(apiBase string) bool {
-	u, err := url.Parse(apiBase)
-	if err != nil {
-		return false
-	}
-	host := u.Hostname()
-	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
+	return isNativeOpenAIOrAzureEndpoint(apiBase)
 }

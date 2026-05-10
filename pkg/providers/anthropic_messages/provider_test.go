@@ -372,46 +372,8 @@ func TestParseResponseBody(t *testing.T) {
 	}
 }
 
-func TestNormalizeBaseURL(t *testing.T) {
-	tests := []struct {
-		name     string
-		apiBase  string
-		expected string
-	}{
-		{
-			name:     "empty string defaults to official API",
-			apiBase:  "",
-			expected: "https://api.anthropic.com/v1",
-		},
-		{
-			name:     "URL without /v1 gets it appended",
-			apiBase:  "https://api.example.com/anthropic",
-			expected: "https://api.example.com/anthropic/v1",
-		},
-		{
-			name:     "URL with /v1 remains unchanged",
-			apiBase:  "https://api.example.com/v1",
-			expected: "https://api.example.com/v1",
-		},
-		{
-			name:     "URL with trailing slash gets cleaned",
-			apiBase:  "https://api.example.com/anthropic/",
-			expected: "https://api.example.com/anthropic/v1",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeBaseURL(tt.apiBase)
-			if got != tt.expected {
-				t.Errorf("normalizeBaseURL(%q) = %q, want %q", tt.apiBase, got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestNewProvider(t *testing.T) {
-	provider := NewProvider("test-key", "https://api.example.com")
+	provider := NewProvider("test-key", "https://api.example.com", "")
 	if provider == nil {
 		t.Fatal("NewProvider() returned nil")
 	}
@@ -424,7 +386,7 @@ func TestNewProvider(t *testing.T) {
 }
 
 func TestGetDefaultModel(t *testing.T) {
-	provider := NewProvider("test-key", "")
+	provider := NewProvider("test-key", "", "")
 	got := provider.GetDefaultModel()
 	expected := "claude-sonnet-4.6"
 	if got != expected {
@@ -743,7 +705,7 @@ func TestProviderChatErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create provider using constructor to ensure proper initialization
-			provider := NewProvider(tt.apiKey, "https://api.example.com")
+			provider := NewProvider(tt.apiKey, "https://api.example.com", "")
 
 			_, err := provider.Chat(context.Background(), tt.messages, nil, "test-model", nil)
 			if err == nil {

@@ -100,9 +100,7 @@ export function AgentDefaultsSection({
         hint={t("pages.config.split_on_marker_hint")}
         layout="setting-row"
         checked={form.splitOnMarker}
-        onCheckedChange={(checked) =>
-          onFieldChange("splitOnMarker", checked)
-        }
+        onCheckedChange={(checked) => onFieldChange("splitOnMarker", checked)}
       />
 
       <SwitchCardField
@@ -114,6 +112,18 @@ export function AgentDefaultsSection({
           onFieldChange("toolFeedbackEnabled", checked)
         }
       />
+
+      {form.toolFeedbackEnabled && (
+        <SwitchCardField
+          label={t("pages.config.tool_feedback_separate_messages")}
+          hint={t("pages.config.tool_feedback_separate_messages_hint")}
+          layout="setting-row"
+          checked={form.toolFeedbackSeparateMessages}
+          onCheckedChange={(checked) =>
+            onFieldChange("toolFeedbackSeparateMessages", checked)
+          }
+        />
+      )}
 
       {form.toolFeedbackEnabled && (
         <Field
@@ -519,7 +529,50 @@ export function LauncherSection({
   const { t } = useTranslation()
 
   return (
-    <ConfigSectionCard title={t("pages.config.sections.launcher")}>
+    <ConfigSectionCard
+      title={t("pages.config.sections.launcher")}
+      description={t("pages.config.launcher_section_hint")}
+    >
+      <Field
+        label={t("pages.config.dashboard_password")}
+        hint={t("pages.config.dashboard_password_hint")}
+        layout="setting-row"
+        controlClassName="md:max-w-md"
+      >
+        <Input
+          type="password"
+          value={launcherForm.dashboardPassword}
+          disabled={disabled}
+          autoComplete="new-password"
+          placeholder={t("pages.config.dashboard_password_placeholder")}
+          onChange={(e) =>
+            onFieldChange("dashboardPassword", e.target.value)
+          }
+        />
+      </Field>
+
+      {launcherForm.dashboardPassword.trim() !== "" && (
+        <Field
+          label={t("pages.config.dashboard_password_confirm")}
+          hint={t("pages.config.dashboard_password_confirm_hint")}
+          layout="setting-row"
+          controlClassName="md:max-w-md"
+        >
+          <Input
+            type="password"
+            value={launcherForm.dashboardPasswordConfirm}
+            disabled={disabled}
+            autoComplete="new-password"
+            placeholder={t(
+              "pages.config.dashboard_password_confirm_placeholder",
+            )}
+            onChange={(e) =>
+              onFieldChange("dashboardPasswordConfirm", e.target.value)
+            }
+          />
+        </Field>
+      )}
+
       <SwitchCardField
         label={t("pages.config.lan_access")}
         hint={t("pages.config.lan_access_hint")}

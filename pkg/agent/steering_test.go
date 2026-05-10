@@ -12,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
+	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -340,97 +343,6 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	}
 }
 
-func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		Session: config.SessionConfig{
-			DMScope: "per-peer",
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := NewAgentLoop(cfg, msgBus, &mockProvider{})
-
-	activeMsg := bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "active turn",
-		Peer: bus.Peer{
-			Kind: "direct",
-			ID:   "user1",
-		},
-	}
-	activeScope, activeAgentID, ok := al.resolveSteeringTarget(activeMsg)
-	if !ok {
-		t.Fatal("expected active message to resolve to a steering scope")
-	}
-
-	otherMsg := bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user2",
-		ChatID:   "chat2",
-		Content:  "other session",
-		Peer: bus.Peer{
-			Kind: "direct",
-			ID:   "user2",
-		},
-	}
-	otherScope, _, ok := al.resolveSteeringTarget(otherMsg)
-	if !ok {
-		t.Fatal("expected other message to resolve to a steering scope")
-	}
-	if otherScope == activeScope {
-		t.Fatalf("expected different steering scopes, got same scope %q", activeScope)
-	}
-
-	if err := msgBus.PublishInbound(context.Background(), otherMsg); err != nil {
-		t.Fatalf("PublishInbound failed: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		al.drainBusToSteering(ctx, activeScope, activeAgentID)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for drainBusToSteering to stop")
-	}
-
-	if msgs := al.dequeueSteeringMessagesForScope(activeScope); len(msgs) != 0 {
-		t.Fatalf("expected no steering messages for active scope, got %v", msgs)
-	}
-
-	select {
-	case <-ctx.Done():
-		t.Fatalf("timeout waiting for requeued message on outbound bus")
-	case requeued := <-msgBus.OutboundChan():
-		if requeued.Channel != otherMsg.Channel || requeued.ChatID != otherMsg.ChatID ||
-			requeued.Content != otherMsg.Content {
-			t.Fatalf("requeued message mismatch: got %+v want %+v", requeued, otherMsg)
-		}
-	}
-}
-
 // slowTool simulates a tool that takes some time to execute.
 type slowTool struct {
 	name     string
@@ -564,6 +476,16 @@ func (p *lateSteeringProvider) Chat(
 
 func (p *lateSteeringProvider) GetDefaultModel() string {
 	return "late-steering-mock"
+}
+
+type fixedTranscriber struct {
+	text string
+}
+
+func (f *fixedTranscriber) Name() string { return "fixed" }
+
+func (f *fixedTranscriber) Transcribe(ctx context.Context, audioFilePath string) (*asr.TranscriptionResponse, error) {
+	return &asr.TranscriptionResponse{Text: f.text}, nil
 }
 
 type blockingDirectProvider struct {
@@ -841,24 +763,22 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}()
 
 	first := bus.InboundMessage{
-		Channel:  "test",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "first message",
-		Peer: bus.Peer{
-			Kind: "direct",
-			ID:   "user1",
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
 		},
+		Content: "first message",
 	}
 	late := bus.InboundMessage{
-		Channel:  "test",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "late append",
-		Peer: bus.Peer{
-			Kind: "direct",
-			ID:   "user1",
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
 		},
+		Content: "late append",
 	}
 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -931,6 +851,307 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}
 }
 
+func TestAgentLoop_Run_QueuedVoiceMessageIsTranscribedBeforeSteering(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &lateSteeringProvider{
+		firstCallStarted: make(chan struct{}),
+		releaseFirstCall: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	store := media.NewFileMediaStore()
+	audioPath := filepath.Join(tmpDir, "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
+		t.Fatalf("write audio fixture: %v", err)
+	}
+	ref, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-voice")
+	if err != nil {
+		t.Fatalf("store audio fixture: %v", err)
+	}
+	al.SetMediaStore(store)
+	al.SetTranscriber(&fixedTranscriber{text: "and also two pieces of bread"})
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- al.Run(runCtx)
+	}()
+
+	first := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "first meal",
+	}
+	late := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		Content: "[voice]",
+		Media:   []string{ref},
+	}
+
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer pubCancel()
+	if err := msgBus.PublishInbound(pubCtx, first); err != nil {
+		t.Fatalf("publish first inbound: %v", err)
+	}
+
+	select {
+	case <-provider.firstCallStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for first provider call to start")
+	}
+
+	if err := msgBus.PublishInbound(pubCtx, late); err != nil {
+		t.Fatalf("publish late voice inbound: %v", err)
+	}
+
+	close(provider.releaseFirstCall)
+
+	subCtx, subCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer subCancel()
+	select {
+	case <-msgBus.OutboundChan():
+	case <-subCtx.Done():
+		t.Fatal("expected outbound response")
+	}
+
+	cancelRun()
+	select {
+	case err := <-runErrCh:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Run to stop")
+	}
+
+	provider.mu.Lock()
+	secondMessages := append([]providers.Message(nil), provider.secondCallMessages...)
+	provider.mu.Unlock()
+
+	foundTranscribedVoice := false
+	for _, msg := range secondMessages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "[voice: and also two pieces of bread]") {
+			foundTranscribedVoice = true
+			break
+		}
+	}
+	if !foundTranscribedVoice {
+		t.Fatalf("expected queued voice message to be transcribed before steering injection, got %#v", secondMessages)
+	}
+}
+
+func TestAgentLoop_Run_PendingStopStillContinuesQueuedFollowUp(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MaxParallelTurns:  1,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &lateSteeringProvider{
+		firstCallStarted: make(chan struct{}),
+		releaseFirstCall: make(chan struct{}),
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- al.Run(runCtx)
+	}()
+	defer func() {
+		cancelRun()
+		select {
+		case err := <-runErrCh:
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for Run to stop")
+		}
+	}()
+
+	blockerSessionKey := session.BuildOpaqueSessionKey("agent:main:test:blocker")
+	targetSessionKey := session.BuildOpaqueSessionKey("agent:main:test:target")
+	blockerCtx := bus.InboundContext{
+		Channel:  "test",
+		ChatID:   "blocker-chat",
+		ChatType: "direct",
+		SenderID: "user1",
+	}
+	targetCtx := bus.InboundContext{
+		Channel:  "test",
+		ChatID:   "target-chat",
+		ChatType: "direct",
+		SenderID: "user1",
+	}
+
+	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Context:    blockerCtx,
+		Content:    "block worker pool",
+		SessionKey: blockerSessionKey,
+	}); err != nil {
+		t.Fatalf("PublishInbound(blocker) error = %v", err)
+	}
+
+	select {
+	case <-provider.firstCallStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for blocker turn to start")
+	}
+
+	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Context:    targetCtx,
+		Content:    "skip this turn",
+		SessionKey: targetSessionKey,
+	}); err != nil {
+		t.Fatalf("PublishInbound(target start) error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ts := al.getActiveTurnState(targetSessionKey)
+		if ts != nil && strings.HasPrefix(ts.turnID, pendingTurnPrefix) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for pending placeholder")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Context:    targetCtx,
+		Content:    "/stop",
+		SessionKey: targetSessionKey,
+	}); err != nil {
+		t.Fatalf("PublishInbound(/stop) error = %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	stopSeen := false
+	for !stopSeen {
+		select {
+		case outbound := <-msgBus.OutboundChan():
+			if outbound.ChatID == "target-chat" && outbound.Content == "Task stopped. Current task was canceled." {
+				stopSeen = true
+			}
+		case <-time.After(10 * time.Millisecond):
+			if time.Now().After(deadline) {
+				t.Fatal("timeout waiting for /stop reply")
+			}
+		}
+	}
+
+	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Context:    targetCtx,
+		Content:    "run this instead",
+		SessionKey: targetSessionKey,
+	}); err != nil {
+		t.Fatalf("PublishInbound(follow-up) error = %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(targetSessionKey) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for follow-up to enter scoped steering queue")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	close(provider.releaseFirstCall)
+
+	deadline = time.Now().Add(5 * time.Second)
+	followUpSeen := false
+	for !followUpSeen {
+		select {
+		case outbound := <-msgBus.OutboundChan():
+			if outbound.ChatID == "target-chat" && outbound.Content == "continued response" {
+				followUpSeen = true
+			}
+		case <-time.After(10 * time.Millisecond):
+			if time.Now().After(deadline) {
+				t.Fatal("timeout waiting for queued follow-up continuation")
+			}
+		}
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		if al.GetActiveTurnBySession(targetSessionKey) == nil &&
+			al.pendingSteeringCountForScope(targetSessionKey) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for target session to go idle")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	provider.mu.Lock()
+	calls := provider.calls
+	secondMessages := append([]providers.Message(nil), provider.secondCallMessages...)
+	provider.mu.Unlock()
+
+	if calls != 2 {
+		t.Fatalf("expected 2 provider calls (blocker + continuation), got %d", calls)
+	}
+
+	foundFollowUp := false
+	for _, msg := range secondMessages {
+		if msg.Role == "user" && msg.Content == "run this instead" {
+			foundFollowUp = true
+		}
+		if msg.Role == "user" && msg.Content == "skip this turn" {
+			t.Fatalf("unexpected canceled message in continuation context: %q", msg.Content)
+		}
+	}
+	if !foundFollowUp {
+		t.Fatal("expected queued follow-up to be processed after pending stop")
+	}
+}
+
 func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -949,7 +1170,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		},
 	}
 
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 	provider := &blockingDirectProvider{
 		firstStarted: make(chan struct{}),
 		releaseFirst: make(chan struct{}),
@@ -1013,6 +1234,62 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 	}
 }
 
+func TestAgentLoop_AgentForSession_UsesStoredScopeMetadata(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{
+				{ID: "sales", Default: true},
+				{ID: "support"},
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	support, ok := al.registry.GetAgent("support")
+	if !ok || support == nil {
+		t.Fatal("expected support agent")
+	}
+
+	metaStore, ok := support.Sessions.(session.MetadataAwareSessionStore)
+	if !ok {
+		t.Fatal("support session store does not support metadata")
+	}
+
+	alias := "agent:support:slack:channel:c001"
+	key := session.BuildOpaqueSessionKey(alias)
+	scope := &session.SessionScope{
+		Version:    session.ScopeVersionV1,
+		AgentID:    "support",
+		Channel:    "slack",
+		Account:    "default",
+		Dimensions: []string{"chat"},
+		Values: map[string]string{
+			"chat": "channel:c001",
+		},
+	}
+	metaStore.EnsureSessionMetadata(key, scope, []string{alias})
+
+	got := al.agentForSession(key)
+	if got == nil {
+		t.Fatal("agentForSession() returned nil")
+	}
+	if got.ID != "support" {
+		t.Fatalf("agentForSession() = %q, want %q", got.ID, "support")
+	}
+}
+
 func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -1060,7 +1337,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		},
 	}
 
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, provider)
 	al.SetMediaStore(store)
@@ -1087,16 +1364,16 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 
 	foundResolvedMedia := false
 	for _, msg := range msgs {
-		if msg.Role != "user" || msg.Content != "describe this image" || len(msg.Media) != 1 {
+		if msg.Role != "user" || !strings.Contains(msg.Content, "describe this image") {
 			continue
 		}
-		if strings.HasPrefix(msg.Media[0], "data:image/png;base64,") {
+		if strings.Contains(msg.Content, "[image:") {
 			foundResolvedMedia = true
 			break
 		}
 	}
 	if !foundResolvedMedia {
-		t.Fatal("expected continue path to inject steering media into the provider request")
+		t.Fatal("expected continue path to inject image path tag into the provider request")
 	}
 
 	defaultAgent := al.registry.GetDefaultAgent()
@@ -1168,10 +1445,16 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 
-	sub := al.SubscribeEvents(32)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		32,
+		runtimeevents.KindAgentInterruptReceived,
+		runtimeevents.KindAgentTurnEnd,
+	)
+	defer closeRuntimeEvents()
 
 	type result struct {
 		resp string
@@ -1258,8 +1541,8 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 		t.Fatal("expected remaining tool to be marked as skipped after graceful interrupt")
 	}
 
-	events := collectEventStream(sub.C)
-	interruptEvt, ok := findEvent(events, EventKindInterruptReceived)
+	events := collectRuntimeEventStream(runtimeCh)
+	interruptEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentInterruptReceived)
 	if !ok {
 		t.Fatal("expected interrupt received event")
 	}
@@ -1271,7 +1554,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 		t.Fatalf("expected graceful interrupt payload, got %q", interruptPayload.Kind)
 	}
 
-	turnEndEvt, ok := findEvent(events, EventKindTurnEnd)
+	turnEndEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentTurnEnd)
 	if !ok {
 		t.Fatal("expected turn end event")
 	}
@@ -1322,7 +1605,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 	started := make(chan struct{})
 	al.RegisterTool(&interruptibleTool{name: "cancel_tool", started: started})
-	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
 
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
@@ -1335,8 +1618,14 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	}
 	defaultAgent.Sessions.SetHistory(sessionKey, originalHistory)
 
-	sub := al.SubscribeEvents(16)
-	defer al.UnsubscribeEvents(sub.ID)
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		16,
+		runtimeevents.KindAgentInterruptReceived,
+		runtimeevents.KindAgentTurnEnd,
+	)
+	defer closeRuntimeEvents()
 
 	type result struct {
 		resp string
@@ -1389,8 +1678,8 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		t.Fatalf("expected history rollback after hard abort, got %#v", finalHistory)
 	}
 
-	events := collectEventStream(sub.C)
-	interruptEvt, ok := findEvent(events, EventKindInterruptReceived)
+	events := collectRuntimeEventStream(runtimeCh)
+	interruptEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentInterruptReceived)
 	if !ok {
 		t.Fatal("expected interrupt received event")
 	}
@@ -1402,7 +1691,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		t.Fatalf("expected hard interrupt payload, got %q", interruptPayload.Kind)
 	}
 
-	turnEndEvt, ok := findEvent(events, EventKindTurnEnd)
+	turnEndEvt, ok := findRuntimeEvent(events, runtimeevents.KindAgentTurnEnd)
 	if !ok {
 		t.Fatal("expected turn end event")
 	}
@@ -1412,6 +1701,149 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	}
 	if turnEndPayload.Status != TurnEndStatusAborted {
 		t.Fatalf("expected aborted turn, got %q", turnEndPayload.Status)
+	}
+}
+
+func TestAgentLoop_StopCommand_AbortsActiveTurnAndClearsQueuedSteering(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &toolCallProvider{
+		toolCalls: []providers.ToolCall{
+			{
+				ID:   "call_1",
+				Type: "function",
+				Name: "cancel_tool",
+				Function: &providers.FunctionCall{
+					Name:      "cancel_tool",
+					Arguments: "{}",
+				},
+				Arguments: map[string]any{},
+			},
+		},
+		finalResp: "should not continue",
+	}
+
+	al := NewAgentLoop(cfg, msgBus, provider)
+	started := make(chan struct{})
+	al.RegisterTool(&interruptibleTool{name: "cancel_tool", started: started})
+	sessionKey := session.BuildMainSessionKey(routing.DefaultAgentID)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- al.Run(runCtx)
+	}()
+	defer func() {
+		cancelRun()
+		select {
+		case err := <-runErrCh:
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for Run to stop")
+		}
+	}()
+
+	baseMsg := testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			ChatType: "direct",
+			SenderID: "user1",
+		},
+		SessionKey: sessionKey,
+	})
+
+	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Context:    baseMsg.Context,
+		Content:    "do work",
+		SessionKey: sessionKey,
+	}); err != nil {
+		t.Fatalf("PublishInbound(start) error = %v", err)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for interruptible tool to start")
+	}
+
+	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Context:    baseMsg.Context,
+		Content:    "follow up after cancel",
+		SessionKey: sessionKey,
+	}); err != nil {
+		t.Fatalf("PublishInbound(follow-up) error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(sessionKey) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for follow-up message to enter steering queue")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Context:    baseMsg.Context,
+		Content:    "/stop",
+		SessionKey: sessionKey,
+	}); err != nil {
+		t.Fatalf("PublishInbound(/stop) error = %v", err)
+	}
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		want := "Task stopped. \"do work\" was canceled."
+		if outbound.Content != want {
+			t.Fatalf("stop reply = %q, want %q", outbound.Content, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for /stop reply")
+	}
+
+	deadline = time.Now().Add(5 * time.Second)
+	for al.GetActiveTurnBySession(sessionKey) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for active turn to stop")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := al.pendingSteeringCountForScope(sessionKey); got != 0 {
+		t.Fatalf("expected cleared steering queue, got %d pending message(s)", got)
+	}
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("unexpected outbound after stop: %q", outbound.Content)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	provider.mu.Lock()
+	calls := provider.calls
+	provider.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected provider to stop before follow-up turn, got %d calls", calls)
 	}
 }
 

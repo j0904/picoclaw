@@ -9,86 +9,53 @@ git:
 
 before:
   hooks:
-    - go mod tidy
     - go generate ./...
-    - sh -c 'cd web/frontend && pnpm install && pnpm build:backend'
-    - sh -c 'go install github.com/tc-hib/go-winres@latest && go-winres make --in web/backend/winres/winres.json --out web/backend/rsrc --product-version={{ .Version }} --file-version={{ .Version }}'
+    - sh -c 'cd web/frontend && CI=true pnpm install --frozen-lockfile && pnpm build:backend'
+    - sh -c 'GOBIN="$(go env GOPATH)/bin"; mkdir -p "$GOBIN"; go install github.com/tc-hib/go-winres@v0.3.3 && "$GOBIN/go-winres" make --in web/backend/winres/winres.json --out web/backend/rsrc --product-version={{ .Version }} --file-version={{ .Version }}'
+    - sh -c 'if [ "${INCLUDE_ANDROID_BUNDLE:-}" = "true" ]; then make build-android-bundle; fi'
 
 builds:
-  - id: picoclaw-linux-amd64
+  - id: picoclaw
     env:
       - CGO_ENABLED=0
     tags:
-      - stdjson
-      - whatsapp_native
       - goolm
+      - stdjson
     ldflags:
       - -s -w
       - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
       - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
       - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ with index .Env "GOVERSION" }}{{ . }}{{ else }}unknown{{ end }}
     goos:
       - linux
+      - windows
+      - darwin
+      - freebsd
+      - netbsd
     goarch:
       - amd64
-    main: ./cmd/picoclaw
-
-  - id: picoclaw-linux-arm64
-    env:
-      - CGO_ENABLED=0
-    tags:
-      - stdjson
-      - whatsapp_native
-      - goolm
-    ldflags:
-      - -s -w
-      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
-    goos:
-      - linux
-    goarch:
       - arm64
+      - riscv64
+      - loong64
+      - arm
+      - s390x
+      - mipsle
+    goarm:
+      - "6"
+      - "7"
+    gomips:
+      - softfloat
     main: ./cmd/picoclaw
-
-  - id: picoclaw-windows-amd64
-    env:
-      - CGO_ENABLED=0
-    tags:
-      - stdjson
-      - whatsapp_native
-      - goolm
-    ldflags:
-      - -s -w
-      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
-    goos:
-      - windows
-    goarch:
-      - amd64
-    main: ./cmd/picoclaw
-
-  - id: picoclaw-windows-arm64
-    env:
-      - CGO_ENABLED=0
-    tags:
-      - goolm
-      - stdjson
-    ldflags:
-      - -s -w
-      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ .Env.GOVERSION }}
-    goos:
-      - windows
-    goarch:
-      - arm64
-    main: ./cmd/picoclaw
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: netbsd
+        goarch: s390x
+      - goos: netbsd
+        goarch: mips64
+      - goos: netbsd
+        goarch: arm
 
   - id: picoclaw-launcher
     binary: picoclaw-launcher
@@ -99,40 +66,93 @@ builds:
       - stdjson
     ldflags:
       - -s -w
+      - -X github.com/sipeed/picoclaw/pkg/config.Version={{ .Version }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/sipeed/picoclaw/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/sipeed/picoclaw/pkg/config.GoVersion={{ with index .Env "GOVERSION" }}{{ . }}{{ else }}unknown{{ end }}
     goos:
       - linux
       - windows
+      - darwin
+      - freebsd
+      - netbsd
     goarch:
       - amd64
       - arm64
+      - riscv64
+      - loong64
+      - arm
+      - s390x
+      - mipsle
+    goarm:
+      - "6"
+      - "7"
+    gomips:
+      - softfloat
     main: ./web/backend
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: netbsd
+        goarch: s390x
+      - goos: netbsd
+        goarch: mips64
+      - goos: netbsd
+        goarch: arm
 
-  - id: picoclaw-launcher-tui
-    binary: picoclaw-launcher-tui
-    env:
-      - CGO_ENABLED=0
+dockers_v2:
+  - id: picoclaw
+    dockerfile: docker/Dockerfile.goreleaser
+    extra_files:
+      - docker/entrypoint.sh
+    ids:
+      - picoclaw
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/picoclaw"
+      - 'docker.io/{{ .Env.DOCKERHUB_IMAGE_NAME }}'
     tags:
-      - goolm
-      - stdjson
-    ldflags:
-      - -s -w
-    goos:
-      - linux
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    main: ./cmd/picoclaw-launcher-tui
+      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly{{ else }}{{ .Tag }}{{ end }}'
+      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly{{ else }}latest{{ end }}'
+    platforms:
+      - linux/amd64
+      - linux/arm64
+      - linux/riscv64
+
+  - id: picoclaw-launcher
+    dockerfile: docker/Dockerfile.goreleaser.launcher
+    ids:
+      - picoclaw
+      - picoclaw-launcher
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/picoclaw"
+      - 'docker.io/{{ .Env.DOCKERHUB_IMAGE_NAME }}'
+    tags:
+      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly-launcher{{ else }}{{ .Tag }}-launcher{{ end }}'
+      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly-launcher{{ else }}launcher{{ end }}'
+    platforms:
+      - linux/amd64
+      - linux/arm64
+      - linux/riscv64
+
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids:
+        - picoclaw
+        - picoclaw-launcher
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
+        timeout: 20m
 
 archives:
-  - id: picoclaw
-    ids:
-      - picoclaw-linux-amd64
-      - picoclaw-linux-arm64
-      - picoclaw-windows-amd64
-      - picoclaw-windows-arm64
-    formats:
-      - tar.gz
+  - formats: [tar.gz]
+    # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -140,44 +160,37 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
+    # use zip for windows archives
     format_overrides:
       - goos: windows
-        formats:
-          - zip
+        formats: [zip]
 
-  - id: picoclaw-launcher
+nfpms:
+  - id: picoclaw
     ids:
+      - picoclaw
       - picoclaw-launcher
-    formats:
-      - tar.gz
-    name_template: >-
-      {{ .ProjectName }}-launcher_
-      {{- title .Os }}_
+    package_name: picoclaw
+    file_name_template: >-
+      {{ .PackageName }}_
       {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
+      {{- else if eq .Arch "arm64" }}aarch64
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
       {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
-
-  - id: picoclaw-launcher-tui
-    ids:
-      - picoclaw-launcher-tui
+    vendor: picoclaw
+    homepage: https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/picoclaw
+    maintainer: picoclaw contributors
+    description: picoclaw - a tool for managing and running tasks
+    license: MIT
     formats:
-      - tar.gz
-    name_template: >-
-      {{ .ProjectName }}-launcher-tui_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
+      - rpm
+      - deb
+    bindir: /usr/bin
+    contents:
+      - src: web/picoclaw-launcher.desktop
+        dst: /usr/share/applications/picoclaw-launcher.desktop
+      - src: web/picoclaw-launcher.png
+        dst: /usr/share/icons/hicolor/512x512/apps/picoclaw-launcher.png
 
 changelog:
   sort: asc
@@ -186,73 +199,15 @@ changelog:
       - "^docs:"
       - "^test:"
 
-dockers:
-  - id: picoclaw-alpine-amd64
-    goos: linux
-    goarch: amd64
-    use: buildx
-    dockerfile: docker/Dockerfile.goreleaser
-    image_templates:
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-amd64"
-      - "ghcr.io/j0904/picoclaw:latest-alpine-amd64"
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-amd64"
-      - "ghcr.io/j0904/picoclaw:latest-amd64"
-    build_flag_templates:
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description={{ .ProjectName }} - AI assistant"
-      - "--label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
-      - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.created={{ time \"2006-01-02T15:04:05Z07:00\" }}"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.licenses=MIT"
-    extra_files:
-      - docker/entrypoint.sh
-
-  - id: picoclaw-alpine-arm64
-    goos: linux
-    goarch: arm64
-    use: buildx
-    dockerfile: docker/Dockerfile.goreleaser
-    image_templates:
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-arm64"
-      - "ghcr.io/j0904/picoclaw:latest-alpine-arm64"
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-arm64"
-      - "ghcr.io/j0904/picoclaw:latest-arm64"
-    build_flag_templates:
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description={{ .ProjectName }} - AI assistant"
-      - "--label=org.opencontainers.image.url=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
-      - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.created={{ time \"2006-01-02T15:04:05Z07:00\" }}"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.licenses=MIT"
-    extra_files:
-      - docker/entrypoint.sh
-
-docker_manifests:
-  - name_template: "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine"
-    image_templates:
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-amd64"
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-alpine-arm64"
-  - name_template: "ghcr.io/j0904/picoclaw:latest-alpine"
-    image_templates:
-      - "ghcr.io/j0904/picoclaw:latest-alpine-amd64"
-      - "ghcr.io/j0904/picoclaw:latest-alpine-arm64"
-  - name_template: "ghcr.io/j0904/picoclaw:{{ .Tag }}"
-    image_templates:
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-amd64"
-      - "ghcr.io/j0904/picoclaw:{{ .Tag }}-arm64"
-  - name_template: "ghcr.io/j0904/picoclaw:latest"
-    image_templates:
-      - "ghcr.io/j0904/picoclaw:latest-amd64"
-      - "ghcr.io/j0904/picoclaw:latest-arm64"
+# upx:
+#    - enabled: true
+#      compress: best
+#      lzma: true
 
 release:
   disable: '{{ isEnvSet "NIGHTLY_BUILD" }}'
+  extra_files:
+    - glob: ./build/picoclaw-android-universal.zip
   footer: >-
 
     ---

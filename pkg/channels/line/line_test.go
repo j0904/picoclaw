@@ -6,10 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 func TestWebhookRejectsOversizedBody(t *testing.T) {
-	ch := &LINEChannel{}
+	ch := &LINEChannel{config: &config.LINESettings{}}
 
 	oversized := bytes.Repeat([]byte("A"), maxWebhookBodySize+1)
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(oversized))
@@ -23,7 +25,7 @@ func TestWebhookRejectsOversizedBody(t *testing.T) {
 }
 
 func TestWebhookAcceptsMaxBodySize(t *testing.T) {
-	ch := &LINEChannel{}
+	ch := &LINEChannel{config: &config.LINESettings{}}
 
 	body := bytes.Repeat([]byte("A"), maxWebhookBodySize)
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
@@ -38,7 +40,7 @@ func TestWebhookAcceptsMaxBodySize(t *testing.T) {
 }
 
 func TestWebhookRejectsOversizedBodyBeforeSignatureCheck(t *testing.T) {
-	ch := &LINEChannel{}
+	ch := &LINEChannel{config: &config.LINESettings{}}
 
 	oversized := bytes.Repeat([]byte("A"), maxWebhookBodySize+1)
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(oversized))
@@ -53,7 +55,7 @@ func TestWebhookRejectsOversizedBodyBeforeSignatureCheck(t *testing.T) {
 }
 
 func TestWebhookRejectsNonPostMethod(t *testing.T) {
-	ch := &LINEChannel{}
+	ch := &LINEChannel{config: &config.LINESettings{}}
 
 	req := httptest.NewRequest(http.MethodGet, "/webhook", nil)
 	rec := httptest.NewRecorder()
@@ -66,7 +68,9 @@ func TestWebhookRejectsNonPostMethod(t *testing.T) {
 }
 
 func TestWebhookRejectsInvalidSignature(t *testing.T) {
-	ch := &LINEChannel{}
+	ch := &LINEChannel{
+		config: &config.LINESettings{},
+	}
 
 	body := `{"events":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))

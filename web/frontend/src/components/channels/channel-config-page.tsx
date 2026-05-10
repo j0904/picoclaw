@@ -1,48 +1,44 @@
-import { IconAlertTriangle, IconLoader2 } from "@tabler/icons-react"
+import { IconLoader2 } from "@tabler/icons-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
   type ChannelConfig,
   type SupportedChannel,
-  getAppConfig,
+  getChannelConfig,
   getChannelsCatalog,
   patchAppConfig,
 } from "@/api/channels"
+import { type ArrayFieldFlusher } from "@/components/channels/channel-array-list-field"
+import {
+  normalizeAllowFromValues,
+  serializeStringArrayForSubmit,
+} from "@/components/channels/channel-array-utils"
+import {
+  SECRET_FIELD_MAP,
+  buildEditConfig,
+  getFieldValueForValidation,
+  isSecretField,
+} from "@/components/channels/channel-config-fields"
 import { getChannelDisplayName } from "@/components/channels/channel-display-name"
 import { DiscordForm } from "@/components/channels/channel-forms/discord-form"
 import { FeishuForm } from "@/components/channels/channel-forms/feishu-form"
 import { GenericForm } from "@/components/channels/channel-forms/generic-form"
+import { MqttForm } from "@/components/channels/channel-forms/mqtt-form"
 import { SlackForm } from "@/components/channels/channel-forms/slack-form"
 import { TelegramForm } from "@/components/channels/channel-forms/telegram-form"
 import { WecomForm } from "@/components/channels/channel-forms/wecom-form"
 import { WeixinForm } from "@/components/channels/channel-forms/weixin-form"
+import { ConfigChangeNotice } from "@/components/config-change-notice"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { useGateway } from "@/hooks/use-gateway"
+import { showSaveSuccessOrRestartToast } from "@/lib/restart-required"
 import { refreshGatewayState } from "@/store/gateway"
 
 interface ChannelConfigPageProps {
   channelName: string
-}
-
-const SECRET_FIELD_MAP: Record<string, string> = {
-  token: "_token",
-  app_secret: "_app_secret",
-  client_secret: "_client_secret",
-  corp_secret: "_corp_secret",
-  channel_secret: "_channel_secret",
-  channel_access_token: "_channel_access_token",
-  access_token: "_access_token",
-  bot_token: "_bot_token",
-  app_token: "_app_token",
-  encoding_aes_key: "_encoding_aes_key",
-  encrypt_key: "_encrypt_key",
-  verification_token: "_verification_token",
-  password: "_password",
-  nickserv_password: "_nickserv_password",
-  sasl_password: "_sasl_password",
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -60,13 +56,50 @@ function asBool(value: unknown): boolean {
   return value === true
 }
 
-function buildEditConfig(config: ChannelConfig): ChannelConfig {
-  const edit: ChannelConfig = { ...config }
-  for (const editKey of Object.values(SECRET_FIELD_MAP)) {
-    edit[editKey] = ""
+function setRecordValueByPath(
+  source: Record<string, unknown>,
+  pathSegments: string[],
+  value: unknown,
+): Record<string, unknown> {
+  const [segment, ...rest] = pathSegments
+  if (!segment) {
+    return source
   }
-  return edit
+  if (rest.length === 0) {
+    return { ...source, [segment]: value }
+  }
+  return {
+    ...source,
+    [segment]: setRecordValueByPath(asRecord(source[segment]), rest, value),
+  }
 }
+
+function setConfigValueByPath(
+  source: ChannelConfig,
+  fieldPath: string,
+  value: unknown,
+): ChannelConfig {
+  return setRecordValueByPath(source, fieldPath.split("."), value)
+}
+
+function serializeGroupTriggerForSubmit(value: unknown): unknown {
+  const groupTrigger = asRecord(value)
+  if (Object.keys(groupTrigger).length === 0) {
+    return value
+  }
+  return {
+    ...groupTrigger,
+    prefixes: serializeStringArrayForSubmit(groupTrigger.prefixes),
+  }
+}
+
+const CHANNEL_COMMON_CONFIG_KEYS = new Set([
+  "allow_from",
+  "group_trigger",
+  "placeholder",
+  "reasoning_channel_id",
+  "typing",
+])
 
 function normalizeConfig(
   channel: SupportedChannel,
@@ -87,32 +120,50 @@ function buildSavePayload(
   editConfig: ChannelConfig,
   enabled: boolean,
 ): ChannelConfig {
-  const payload: ChannelConfig = { enabled }
+  const payload: ChannelConfig = { enabled, type: channel.config_key }
+  const settings: ChannelConfig = {}
 
   for (const [key, value] of Object.entries(editConfig)) {
     if (key.startsWith("_")) continue
     if (key === "enabled") continue
-    if (key in SECRET_FIELD_MAP) continue
+    if (CHANNEL_COMMON_CONFIG_KEYS.has(key)) {
+      if (key === "allow_from") {
+        payload[key] = serializeStringArrayForSubmit(
+          normalizeAllowFromValues(value),
+        )
+      } else if (key === "group_trigger") {
+        payload[key] = serializeGroupTriggerForSubmit(value)
+      } else {
+        payload[key] = value
+      }
+      continue
+    }
+    if (isSecretField(key)) continue
 
-    payload[key] = value
+    settings[key] = serializeStringArrayForSubmit(value)
   }
 
   for (const [secretKey, editKey] of Object.entries(SECRET_FIELD_MAP)) {
     const incoming = asString(editConfig[editKey])
     if (incoming !== "") {
-      payload[secretKey] = incoming
+      settings[secretKey] = incoming
       continue
     }
-    if (secretKey in editConfig) {
-      payload[secretKey] = editConfig[secretKey]
+    const existing = asString(editConfig[secretKey]).trim()
+    if (existing !== "") {
+      settings[secretKey] = existing
     }
   }
 
   if (channel.name === "whatsapp_native") {
-    payload.use_native = true
+    settings.use_native = true
   }
   if (channel.name === "whatsapp") {
-    payload.use_native = false
+    settings.use_native = false
+  }
+
+  if (Object.keys(settings).length > 0) {
+    payload.settings = settings
   }
 
   return payload
@@ -121,51 +172,52 @@ function buildSavePayload(
 function isConfigured(
   channel: SupportedChannel,
   config: ChannelConfig,
+  configuredSecrets: readonly string[],
 ): boolean {
+  const hasValue = (key: string) =>
+    !isMissingRequiredValue(
+      getFieldValueForValidation(config, configuredSecrets, key),
+    )
+
   switch (channel.name) {
     case "telegram":
-      return asString(config.token) !== ""
+      return hasValue("token")
     case "discord":
-      return asString(config.token) !== ""
+      return hasValue("token")
     case "slack":
-      return asString(config.bot_token) !== ""
+      return hasValue("bot_token")
     case "feishu":
-      return (
-        asString(config.app_id) !== "" && asString(config.app_secret) !== ""
-      )
+      return hasValue("app_id") && hasValue("app_secret")
     case "dingtalk":
-      return (
-        asString(config.client_id) !== "" &&
-        asString(config.client_secret) !== ""
-      )
+      return hasValue("client_id") && hasValue("client_secret")
     case "line":
-      return asString(config.channel_access_token) !== ""
+      return hasValue("channel_secret") && hasValue("channel_access_token")
     case "qq":
-      return (
-        asString(config.app_id) !== "" && asString(config.app_secret) !== ""
-      )
+      return hasValue("app_id") && hasValue("app_secret")
     case "onebot":
-      return asString(config.ws_url) !== ""
+      return hasValue("ws_url")
     case "weixin":
-      return asString(config.account_id) !== ""
+      return hasValue("account_id")
     case "wecom":
-      return asString(config.bot_id) !== ""
+      return hasValue("bot_id")
     case "whatsapp":
-      return asString(config.bridge_url) !== ""
+      return hasValue("bridge_url")
     case "whatsapp_native":
       return asBool(config.use_native)
     case "pico":
-      return asString(config.token) !== ""
+      return hasValue("token")
     case "maixcam":
-      return asString(config.host) !== ""
+      return hasValue("host")
     case "matrix":
       return (
-        asString(config.homeserver) !== "" &&
-        asString(config.user_id) !== "" &&
-        asString(config.access_token) !== ""
+        hasValue("homeserver") &&
+        hasValue("user_id") &&
+        hasValue("access_token")
       )
     case "irc":
-      return asString(config.server) !== ""
+      return hasValue("server")
+    case "mqtt":
+      return hasValue("broker") && hasValue("agent_id")
     default:
       return false
   }
@@ -201,6 +253,8 @@ function getRequiredFieldKeys(channelName: string): string[] {
       return ["homeserver", "user_id", "access_token"]
     case "irc":
       return ["server"]
+    case "mqtt":
+      return ["broker", "agent_id"]
     default:
       return []
   }
@@ -230,6 +284,7 @@ const CHANNELS_WITHOUT_DOCS = new Set([
   "irc",
   "whatsapp",
   "whatsapp_native",
+  "mqtt",
 ])
 
 export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
@@ -245,21 +300,38 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
   const [channel, setChannel] = useState<SupportedChannel | null>(null)
   const [baseConfig, setBaseConfig] = useState<ChannelConfig>({})
   const [editConfig, setEditConfig] = useState<ChannelConfig>({})
+  const [configuredSecrets, setConfiguredSecrets] = useState<string[]>([])
   const [enabled, setEnabled] = useState(false)
+  const [arrayFieldResetVersion, setArrayFieldResetVersion] = useState(0)
+  const arrayFieldFlushersRef = useRef(new Map<string, ArrayFieldFlusher>())
+  const loadRequestIdRef = useRef(0)
+
+  const resetPageState = useCallback(() => {
+    arrayFieldFlushersRef.current.clear()
+    setChannel(null)
+    setBaseConfig({})
+    setEditConfig({})
+    setConfiguredSecrets([])
+    setEnabled(false)
+    setFetchError("")
+    setServerError("")
+    setFieldErrors({})
+    setArrayFieldResetVersion((version) => version + 1)
+  }, [])
 
   const loadData = useCallback(
     async (silent = false) => {
+      const requestId = loadRequestIdRef.current + 1
+      loadRequestIdRef.current = requestId
       if (!silent) setLoading(true)
       try {
-        const [catalog, appConfig] = await Promise.all([
-          getChannelsCatalog(),
-          getAppConfig(),
-        ])
+        const catalog = await getChannelsCatalog()
+        if (loadRequestIdRef.current !== requestId) return
         const matched =
           catalog.channels.find((item) => item.name === channelName) ?? null
 
         if (!matched) {
-          setChannel(null)
+          resetPageState()
           setFetchError(
             t("channels.page.notFound", {
               name: channelName,
@@ -268,29 +340,37 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
           return
         }
 
-        const channelsConfig = asRecord(asRecord(appConfig).channels)
-        const raw = asRecord(channelsConfig[matched.config_key])
+        const channelConfig = await getChannelConfig(channelName)
+        if (loadRequestIdRef.current !== requestId) return
+        const raw = asRecord(channelConfig.config)
         const normalized = normalizeConfig(matched, raw)
 
         setChannel(matched)
         setBaseConfig(normalized)
-        setEditConfig(buildEditConfig(normalized))
+        setEditConfig(buildEditConfig(matched.name, normalized))
+        setConfiguredSecrets(channelConfig.configured_secrets ?? [])
         setEnabled(asBool(normalized.enabled))
         setFetchError("")
         setServerError("")
         setFieldErrors({})
       } catch (e) {
+        if (loadRequestIdRef.current !== requestId) return
+        setConfiguredSecrets([])
         setFetchError(e instanceof Error ? e.message : t("channels.loadError"))
       } finally {
-        if (!silent) setLoading(false)
+        if (!silent && loadRequestIdRef.current === requestId) {
+          setLoading(false)
+        }
       }
     },
-    [channelName, t],
+    [channelName, resetPageState, t],
   )
 
   useEffect(() => {
+    resetPageState()
+    setLoading(true)
     loadData()
-  }, [loadData])
+  }, [loadData, resetPageState])
 
   const previousGatewayStatusRef = useRef(gatewayState)
   useEffect(() => {
@@ -301,15 +381,21 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     previousGatewayStatusRef.current = gatewayState
   }, [gatewayState, loadData])
 
-  const savePayload = useMemo(() => {
-    if (!channel) return null
-    return buildSavePayload(channel, editConfig, enabled)
-  }, [channel, editConfig, enabled])
-
   const configured = useMemo(() => {
-    if (!channel || !savePayload) return false
-    return isConfigured(channel, savePayload)
-  }, [channel, savePayload])
+    if (!channel) return false
+    return isConfigured(channel, editConfig, configuredSecrets)
+  }, [channel, configuredSecrets, editConfig])
+
+  const isDirty = useMemo(() => {
+    if (loading || !channel || channel.name !== channelName) return false
+    const basePayload = buildSavePayload(
+      channel,
+      buildEditConfig(channel.name, baseConfig),
+      asBool(baseConfig.enabled),
+    )
+    const currentPayload = buildSavePayload(channel, editConfig, enabled)
+    return JSON.stringify(basePayload) !== JSON.stringify(currentPayload)
+  }, [baseConfig, channel, channelName, editConfig, enabled, loading])
 
   const docsUrl = useMemo(() => {
     if (!channel) return ""
@@ -361,18 +447,53 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     })
   }, [])
 
+  const registerArrayFieldFlusher = useCallback(
+    (fieldPath: string, flusher: ArrayFieldFlusher | null) => {
+      if (flusher) {
+        arrayFieldFlushersRef.current.set(fieldPath, flusher)
+        return
+      }
+      arrayFieldFlushersRef.current.delete(fieldPath)
+    },
+    [],
+  )
+
+  const flushPendingArrayFieldDrafts = useCallback(
+    (sourceConfig: ChannelConfig): ChannelConfig => {
+      let nextConfig = sourceConfig
+      for (const [fieldPath, flusher] of arrayFieldFlushersRef.current) {
+        const flushedValue = flusher()
+        if (flushedValue === null) {
+          continue
+        }
+        nextConfig = setConfigValueByPath(nextConfig, fieldPath, flushedValue)
+      }
+      return nextConfig
+    },
+    [],
+  )
+
   const handleReset = () => {
-    setEditConfig(buildEditConfig(baseConfig))
+    if (!channel) return
+    setEditConfig(buildEditConfig(channel.name, baseConfig))
     setEnabled(asBool(baseConfig.enabled))
     setServerError("")
     setFieldErrors({})
+    setArrayFieldResetVersion((version) => version + 1)
   }
 
   const handleSave = async () => {
-    if (!channel || !savePayload) return
+    if (!channel) return
+
+    const preparedEditConfig = flushPendingArrayFieldDrafts(editConfig)
+    if (preparedEditConfig !== editConfig) {
+      setEditConfig(preparedEditConfig)
+    }
 
     const missingRequiredFields = requiredKeys.filter((key) =>
-      isMissingRequiredValue(savePayload[key]),
+      isMissingRequiredValue(
+        getFieldValueForValidation(preparedEditConfig, configuredSecrets, key),
+      ),
     )
     if (missingRequiredFields.length > 0) {
       const requiredFieldError = t("channels.validation.requiredField")
@@ -389,12 +510,20 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     setServerError("")
     setFieldErrors({})
     try {
+      const savePayload = buildSavePayload(channel, preparedEditConfig, enabled)
       await patchAppConfig({
-        channels: {
+        channel_list: {
           [channel.config_key]: savePayload,
         },
       })
       await loadData()
+      const gateway = await refreshGatewayState({ force: true })
+      showSaveSuccessOrRestartToast(
+        t,
+        t("channels.page.saveSuccess"),
+        channelDisplayName,
+        gateway?.restartRequired === true,
+      )
     } catch (e) {
       const message =
         e instanceof Error ? e.message : t("channels.page.saveError")
@@ -456,8 +585,10 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
           <TelegramForm
             config={editConfig}
             onChange={handleChange}
-            isEdit={isEdit}
+            configuredSecrets={configuredSecrets}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "discord":
@@ -465,8 +596,10 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
           <DiscordForm
             config={editConfig}
             onChange={handleChange}
-            isEdit={isEdit}
+            configuredSecrets={configuredSecrets}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "slack":
@@ -474,8 +607,10 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
           <SlackForm
             config={editConfig}
             onChange={handleChange}
-            isEdit={isEdit}
+            configuredSecrets={configuredSecrets}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "feishu":
@@ -483,7 +618,18 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
           <FeishuForm
             config={editConfig}
             onChange={handleChange}
-            isEdit={isEdit}
+            configuredSecrets={configuredSecrets}
+            fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
+          />
+        )
+      case "mqtt":
+        return (
+          <MqttForm
+            config={editConfig}
+            onChange={handleChange}
+            configuredSecrets={configuredSecrets}
             fieldErrors={fieldErrors}
           />
         )
@@ -494,6 +640,8 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             onChange={handleChange}
             isEdit={isEdit}
             onBindSuccess={() => void handleWeixinBindSuccess()}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
       case "wecom":
@@ -510,10 +658,12 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             <GenericForm
               config={editConfig}
               onChange={handleChange}
-              isEdit={isEdit}
+              configuredSecrets={configuredSecrets}
               hiddenKeys={[...hiddenKeys, "bot_id"]}
               requiredKeys={requiredKeys}
               fieldErrors={fieldErrors}
+              registerArrayFieldFlusher={registerArrayFieldFlusher}
+              arrayFieldResetVersion={arrayFieldResetVersion}
             />
           </>
         )
@@ -522,10 +672,12 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
           <GenericForm
             config={editConfig}
             onChange={handleChange}
-            isEdit={isEdit}
+            configuredSecrets={configuredSecrets}
             hiddenKeys={hiddenKeys}
             requiredKeys={requiredKeys}
             fieldErrors={fieldErrors}
+            registerArrayFieldFlusher={registerArrayFieldFlusher}
+            arrayFieldResetVersion={arrayFieldResetVersion}
           />
         )
     }
@@ -536,19 +688,17 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
       <PageHeader
         title={channelDisplayName}
         titleExtra={
-          channel ? (
-            <div className="flex items-center gap-1.5">
-              {enabled ? (
-                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                  {t("channels.page.enabled")}
-                </span>
-              ) : configured ? (
-                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
-                  {t("channels.status.configured")}
-                </span>
-              ) : null}
-            </div>
-          ) : undefined
+          channel &&
+          docsUrl && (
+            <a
+              href={docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+            >
+              {t("channels.page.docLink")}
+            </a>
+          )
         }
       />
 
@@ -562,46 +712,9 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
             {fetchError}
           </div>
         ) : (
-          <div className="w-full max-w-250 space-y-5 pt-2">
-            <div className="flex items-center gap-2 text-sm">
-              <p className="font-medium">
-                {t("channels.edit", {
-                  name: channelDisplayName,
-                })}
-              </p>
-              {channel && docsUrl && (
-                <a
-                  href={docsUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
-                >
-                  {t("channels.page.docLink")}
-                </a>
-              )}
-            </div>
-
-            {channel?.name === "weixin" && (
-              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">
-                <div className="flex items-start gap-3">
-                  <IconAlertTriangle
-                    size={18}
-                    className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"
-                  />
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
-                      {t("channels.weixin.warningTitle")}
-                    </p>
-                    <p className="text-sm text-amber-700/90 dark:text-amber-300/90">
-                      {t("channels.weixin.warningDesc")}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
+          <div className="w-full max-w-4xl space-y-6 pt-5">
             {!hidesPageLevelEnableToggle && (
-              <div className="border-border/60 bg-background flex items-center justify-between rounded-lg border px-4 py-3">
+              <div className="bg-card text-card-foreground border-border/60 flex items-center justify-between rounded-xl border px-6 py-4 shadow-sm">
                 <p className="text-sm font-medium">
                   {t("channels.page.enableLabel")}
                 </p>
@@ -615,11 +728,23 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
               <p className="text-destructive text-sm">{serverError}</p>
             )}
 
+            {isDirty && (
+              <ConfigChangeNotice
+                kind="save"
+                title={t("common.saveChangesTitle")}
+                description={t("channels.page.savePrompt")}
+              />
+            )}
+
             <div className="border-border/60 flex justify-end gap-2 border-t py-4">
-              <Button variant="outline" onClick={handleReset} disabled={saving}>
+              <Button
+                variant="outline"
+                onClick={handleReset}
+                disabled={!isDirty || saving}
+              >
                 {t("common.reset")}
               </Button>
-              <Button onClick={handleSave} disabled={saving}>
+              <Button onClick={handleSave} disabled={!isDirty || saving}>
                 {saving ? t("common.saving") : t("common.save")}
               </Button>
             </div>

@@ -1,47 +1,34 @@
 # ============================================================
-# Minimal runtime image - download pre-built binary
+# Stage 1: Build the picoclaw binary
 # ============================================================
-FROM debian:bookworm-slim
+FROM golang:1.25-alpine AS builder
 
-ARG VERSION=latest
+RUN apk add --no-cache git make
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates tzdata curl \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
 
-# Determine architecture and download binary
-RUN ARCH=$(uname -m) && \
-    case "$ARCH" in \
-      x86_64) GOARCH="x86_64" ;; \
-      aarch64) GOARCH="arm64" ;; \
-      armv7l) GOARCH="armv7" ;; \
-      armv6l) GOARCH="armv6" ;; \
-      riscv64) GOARCH="riscv64" ;; \
-      loongarch64) GOARCH="loong64" ;; \
-      *) echo "Unsupported architecture: $ARCH"; exit 1 ;; \
-    esac && \
-    if [ "$VERSION" = "latest" ]; then \
-      VERSION=$(curl -fsSL https://api.github.com/repos/j0904/picoclaw/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'); \
-    fi && \
-    curl -L -o /tmp/picoclaw.tar.gz \
-      "https://github.com/j0904/picoclaw/releases/download/${VERSION}/picoclaw_Linux_${GOARCH}.tar.gz" && \
-    tar -xzf /tmp/picoclaw.tar.gz -C /usr/local/bin picoclaw && \
-    rm /tmp/picoclaw.tar.gz && \
-    chmod +x /usr/local/bin/picoclaw
+# Cache dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source and build
+COPY . .
+RUN make build
+
+# ============================================================
+# Stage 2: Minimal runtime image
+# ============================================================
+FROM alpine:3.23
+
+RUN apk add --no-cache ca-certificates tzdata curl
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -fs http://localhost:18790/health || exit 1
+  CMD wget -q --spider http://localhost:18790/health || exit 1
 
-# Create non-root user and group
-RUN groupadd -g 1000 picoclaw && \
-    useradd -u 1000 -g picoclaw -m -s /bin/bash picoclaw
+# Copy binary and first-run entrypoint (same as release image).
+COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# Switch to non-root user
-USER picoclaw
-
-# Run onboard to create initial directories and config
-RUN /usr/local/bin/picoclaw onboard
-
-ENTRYPOINT ["picoclaw"]
-CMD ["gateway"]
+ENTRYPOINT ["/entrypoint.sh"]

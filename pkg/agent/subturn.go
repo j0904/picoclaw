@@ -8,8 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	runtimeevents "github.com/sipeed/picoclaw/pkg/events"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -172,7 +174,10 @@ type SubTurnConfig struct {
 	// Used by team tool to enforce token limits across all team members.
 	InitialTokenBudget *atomic.Int64
 
-	// Can be extended with temperature, topP, etc.
+	// TargetAgentID, when set, runs the sub-turn as the specified agent.
+	// The target agent's workspace, model, tools, and system prompt are used
+	// instead of the caller's. If empty, the sub-turn runs as the parent agent.
+	TargetAgentID string
 }
 
 // ====================== Context Keys ======================
@@ -230,6 +235,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Critical:           cfg.Critical,
 		Timeout:            cfg.Timeout,
 		MaxContextRunes:    cfg.MaxContextRunes,
+		TargetAgentID:      cfg.TargetAgentID,
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
@@ -312,8 +318,9 @@ func spawnSubTurn(
 		return nil, ErrDepthLimitExceeded
 	}
 
-	// 2. Config validation
-	if cfg.Model == "" {
+	// 2. Config validation: Model is required unless TargetAgentID is set
+	//    (the target agent provides its own model).
+	if cfg.Model == "" && cfg.TargetAgentID == "" {
 		return nil, ErrInvalidSubTurnConfig
 	}
 
@@ -331,12 +338,22 @@ func spawnSubTurn(
 
 	childID := al.generateSubTurnID()
 
-	// Get the agent instance from parent, falling back to the default agent.
-	// Wrap it in a shallow copy that uses an ephemeral (in-memory only) session store
-	// so that child turns never pollute or persist to the parent's session history.
-	baseAgent := parentTS.agent
-	if baseAgent == nil {
-		baseAgent = al.registry.GetDefaultAgent()
+	// Resolve the agent instance for the child turn.
+	// When TargetAgentID is set, look up that agent from the registry so the
+	// child runs with the target's workspace, model, tools, and system prompt.
+	// Otherwise fall back to the parent's agent (existing behavior).
+	var baseAgent *AgentInstance
+	if cfg.TargetAgentID != "" {
+		var ok bool
+		baseAgent, ok = al.registry.GetAgent(cfg.TargetAgentID)
+		if !ok {
+			return nil, fmt.Errorf("target agent %q not found in registry", cfg.TargetAgentID)
+		}
+	} else {
+		baseAgent = parentTS.agent
+		if baseAgent == nil {
+			baseAgent = al.registry.GetDefaultAgent()
+		}
 	}
 	if baseAgent == nil {
 		return nil, errors.New("parent turnState has no agent instance")
@@ -351,15 +368,17 @@ func spawnSubTurn(
 	}
 
 	// Create processOptions for the child turn
+	dispatch := DispatchRequest{
+		SessionKey:     childID,
+		UserMessage:    cfg.SystemPrompt,
+		Media:          nil,
+		InboundContext: cloneInboundContext(parentTS.opts.Dispatch.InboundContext),
+	}
 	opts := processOptions{
-		SessionKey:              childID,
-		Channel:                 parentTS.channel,
-		ChatID:                  parentTS.chatID,
-		SenderID:                parentTS.opts.SenderID,
+		Dispatch:                dispatch,
+		SenderID:                parentTS.opts.Dispatch.SenderID(),
 		SenderDisplayName:       parentTS.opts.SenderDisplayName,
-		UserMessage:             cfg.SystemPrompt, // Task description becomes the first user message
 		SystemPromptOverride:    cfg.ActualSystemPrompt,
-		Media:                   nil,
 		InitialSteeringMessages: cfg.InitialMessages,
 		DefaultResponse:         "",
 		EnableSummary:           false,
@@ -369,7 +388,11 @@ func spawnSubTurn(
 	}
 
 	// Create event scope for the child turn
-	scope := al.newTurnEventScope(agent.ID, childID)
+	scope := al.newTurnEventScope(
+		agent.ID,
+		childID,
+		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
+	)
 
 	// Create child turnState using the new API
 	childTS := newTurnState(&agent, opts, scope)
@@ -415,7 +438,7 @@ func spawnSubTurn(
 	parentTS.mu.Unlock()
 
 	// 6. Emit Spawn event
-	al.emitEvent(EventKindSubTurnSpawn,
+	al.emitEvent(runtimeevents.KindAgentSubTurnSpawn,
 		childTS.eventMeta("spawnSubTurn", "subturn.spawn"),
 		SubTurnSpawnPayload{
 			AgentID:      childTS.agentID,
@@ -427,6 +450,7 @@ func spawnSubTurn(
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
 		if r := recover(); r != nil {
+			logger.RecoverPanicNoExit(r)
 			err = fmt.Errorf("subturn panicked: %v", r)
 			result = nil
 			logger.ErrorCF("subturn", "SubTurn panicked", map[string]any{
@@ -445,7 +469,7 @@ func spawnSubTurn(
 		if err != nil {
 			status = "error"
 		}
-		al.emitEvent(EventKindSubTurnEnd,
+		al.emitEvent(runtimeevents.KindAgentSubTurnEnd,
 			childTS.eventMeta("spawnSubTurn", "subturn.end"),
 			SubTurnEndPayload{
 				AgentID: childTS.agentID,
@@ -455,7 +479,8 @@ func spawnSubTurn(
 	}()
 
 	// 8. Execute sub-turn via the real agent loop.
-	turnRes, turnErr := al.runTurn(childCtx, childTS)
+	pipeline := NewPipeline(al)
+	turnRes, turnErr := al.runTurn(childCtx, childTS, pipeline)
 
 	// Release the concurrency semaphore immediately after runTurn completes,
 	// before the cleanup defer runs. This prevents a deadlock where:
@@ -495,28 +520,29 @@ func spawnSubTurn(
 //
 // Delivery behavior:
 //   - If parent turn is still running: attempts to deliver to pendingResults channel
-//   - If channel is full: emits SubTurnOrphanResultEvent (result is lost from channel but tracked)
-//   - If parent turn has finished: emits SubTurnOrphanResultEvent (late arrival)
+//   - If channel is full: emits agent.subturn.orphan (result is lost from channel but tracked)
+//   - If parent turn has finished: emits agent.subturn.orphan (late arrival)
 //
 // Thread safety:
 //   - Reads parent state under lock, then releases lock before channel send
 //   - Small race window exists but is acceptable (worst case: result becomes orphan)
 //
 // Event emissions:
-//   - SubTurnResultDeliveredEvent: successful delivery to channel
-//   - SubTurnOrphanResultEvent: delivery failed (parent finished or channel full)
+//   - agent.subturn.result_delivered: successful delivery to channel
+//   - agent.subturn.orphan: delivery failed (parent finished or channel full)
 func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, result *tools.ToolResult) {
 	// Let GC clean up the pendingResults channel; parent Finish will no longer close it.
 	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
 	defer func() {
 		if r := recover(); r != nil {
+			logger.RecoverPanicNoExit(r)
 			logger.WarnCF("subturn", "recovered panic sending to pendingResults", map[string]any{
 				"parent_id": parentTS.turnID,
 				"child_id":  childID,
 				"recover":   r,
 			})
 			if result != nil && al != nil {
-				al.emitEvent(EventKindSubTurnOrphan,
+				al.emitEvent(runtimeevents.KindAgentSubTurnOrphan,
 					parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
 					SubTurnOrphanPayload{ParentTurnID: parentTS.turnID, ChildTurnID: childID, Reason: "panic"},
 				)
@@ -531,7 +557,7 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 	// If parent turn has already finished, treat this as an orphan result
 	if isFinished || resultChan == nil {
 		if result != nil && al != nil {
-			al.emitEvent(EventKindSubTurnOrphan,
+			al.emitEvent(runtimeevents.KindAgentSubTurnOrphan,
 				parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
 				SubTurnOrphanPayload{ParentTurnID: parentTS.turnID, ChildTurnID: childID, Reason: "parent_finished"},
 			)
@@ -547,7 +573,7 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 	case resultChan <- result:
 		// Successfully delivered
 		if al != nil {
-			al.emitEvent(EventKindSubTurnResultDelivered,
+			al.emitEvent(runtimeevents.KindAgentSubTurnResultDelivered,
 				parentTS.eventMeta("deliverSubTurnResult", "subturn.result_delivered"),
 				SubTurnResultDeliveredPayload{ContentLen: len(result.ForLLM)},
 			)
@@ -561,7 +587,7 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 		})
 		if result != nil && al != nil {
 			al.emitEvent(
-				EventKindSubTurnOrphan,
+				runtimeevents.KindAgentSubTurnOrphan,
 				parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
 				SubTurnOrphanPayload{
 					ParentTurnID: parentTS.turnID,
@@ -602,6 +628,7 @@ type ephemeralSessionStoreIface interface {
 	SetHistory(key string, history []providers.Message)
 	TruncateHistory(key string, keepLast int)
 	Save(key string) error
+	ListSessions() []string
 	Close() error
 }
 
@@ -613,6 +640,10 @@ func (e *ephemeralSessionStore) AddMessage(_, role, content string) {
 }
 
 func (e *ephemeralSessionStore) AddFullMessage(_ string, msg providers.Message) {
+	if messageutil.IsTransientAssistantThoughtMessage(msg) {
+		return
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.history = append(e.history, msg)
@@ -642,6 +673,7 @@ func (e *ephemeralSessionStore) SetSummary(_, summary string) {
 func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	history = messageutil.FilterInvalidHistoryMessages(history)
 	e.history = make([]providers.Message, len(history))
 	copy(e.history, history)
 	e.truncateLocked()
@@ -661,8 +693,9 @@ func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
 	e.history = e.history[len(e.history)-keepLast:]
 }
 
-func (e *ephemeralSessionStore) Save(_ string) error { return nil }
-func (e *ephemeralSessionStore) Close() error        { return nil }
+func (e *ephemeralSessionStore) Save(_ string) error    { return nil }
+func (e *ephemeralSessionStore) Close() error           { return nil }
+func (e *ephemeralSessionStore) ListSessions() []string { return nil }
 
 func (e *ephemeralSessionStore) truncateLocked() {
 	if len(e.history) > maxEphemeralHistorySize {

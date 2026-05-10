@@ -30,6 +30,7 @@ type SubTurnConfig struct {
 	ActualSystemPrompt string
 	InitialMessages    []providers.Message
 	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
+	TargetAgentID      string        // If set, run as this agent (its workspace, model, tools)
 }
 
 type SubagentTask struct {
@@ -67,6 +68,12 @@ type SubagentManager struct {
 	hasTemperature bool
 	nextID         int
 	spawner        SpawnSubTurnFunc
+
+	// mediaResolver resolves media:// refs in tool-loop messages before
+	// each LLM call in the legacy RunToolLoop fallback path.
+	// This lets subagents reuse the same media handling behavior as the
+	// main agent loop without importing pkg/agent and creating a cycle.
+	mediaResolver func([]providers.Message) []providers.Message
 }
 
 func NewSubagentManager(
@@ -88,6 +95,17 @@ func (sm *SubagentManager) SetSpawner(spawner SpawnSubTurnFunc) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.spawner = spawner
+}
+
+// SetMediaResolver injects a message preprocessor that resolves media:// refs
+// into LLM-ready content before each tool-loop iteration.
+// This is only used by the legacy RunToolLoop fallback path.
+func (sm *SubagentManager) SetMediaResolver(
+	resolver func([]providers.Message) []providers.Message,
+) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.mediaResolver = resolver
 }
 
 // SetLLMOptions sets max tokens and temperature for subagent LLM calls.
@@ -177,6 +195,7 @@ func (sm *SubagentManager) runTask(
 	temperature := sm.temperature
 	hasMaxTokens := sm.hasMaxTokens
 	hasTemperature := sm.hasTemperature
+	mediaResolver := sm.mediaResolver
 	sm.mu.RUnlock()
 
 	var result *ToolResult
@@ -223,6 +242,7 @@ After completing the task, provide a clear summary of what was done.`
 			Tools:         tools,
 			MaxIterations: maxIter,
 			LLMOptions:    llmOptions,
+			MediaResolver: mediaResolver,
 		}, messages, task.OriginChannel, task.OriginChatID)
 
 		if err == nil {

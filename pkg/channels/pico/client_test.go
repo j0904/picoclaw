@@ -18,7 +18,8 @@ import (
 )
 
 func TestNewPicoClientChannel_MissingURL(t *testing.T) {
-	_, err := NewPicoClientChannel(config.PicoClientConfig{}, bus.NewMessageBus())
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	_, err := NewPicoClientChannel(bc, &config.PicoClientSettings{}, bus.NewMessageBus())
 	if err == nil {
 		t.Fatal("expected error for missing URL")
 	}
@@ -28,7 +29,8 @@ func TestNewPicoClientChannel_MissingURL(t *testing.T) {
 }
 
 func TestNewPicoClientChannel_OK(t *testing.T) {
-	ch, err := NewPicoClientChannel(config.PicoClientConfig{
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
 		URL: "ws://localhost:9999/ws",
 	}, bus.NewMessageBus())
 	if err != nil {
@@ -40,7 +42,8 @@ func TestNewPicoClientChannel_OK(t *testing.T) {
 }
 
 func TestSend_NotRunning(t *testing.T) {
-	ch, err := NewPicoClientChannel(config.PicoClientConfig{
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
 		URL: "ws://localhost:9999/ws",
 	}, bus.NewMessageBus())
 	if err != nil {
@@ -104,7 +107,8 @@ func TestClientChannel_ConnectAndSend(t *testing.T) {
 	defer srv.Close()
 
 	mb := bus.NewMessageBus()
-	ch, err := NewPicoClientChannel(config.PicoClientConfig{
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
 		URL:          wsURL(srv.URL),
 		Token:        *config.NewSecureString("test-token"),
 		SessionID:    "sess-1",
@@ -137,7 +141,8 @@ func TestClientChannel_AuthFailure(t *testing.T) {
 	srv := testServer(t, "correct-token")
 	defer srv.Close()
 
-	ch, err := NewPicoClientChannel(config.PicoClientConfig{
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
 		URL:   wsURL(srv.URL),
 		Token: *config.NewSecureString("wrong-token"),
 	}, bus.NewMessageBus())
@@ -161,7 +166,8 @@ func TestClientChannel_ReceivesServerMessage(t *testing.T) {
 
 	mb := bus.NewMessageBus()
 
-	ch, err := NewPicoClientChannel(config.PicoClientConfig{
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
 		URL:         wsURL(srv.URL),
 		SessionID:   "sess-echo",
 		ReadTimeout: 10,
@@ -203,7 +209,8 @@ func TestClientChannel_StartTyping(t *testing.T) {
 	srv := testServer(t, "")
 	defer srv.Close()
 
-	ch, err := NewPicoClientChannel(config.PicoClientConfig{
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
 		URL:         wsURL(srv.URL),
 		SessionID:   "sess-type",
 		ReadTimeout: 10,
@@ -231,7 +238,8 @@ func TestSend_ClosedConnection(t *testing.T) {
 	srv := testServer(t, "")
 	defer srv.Close()
 
-	ch, err := NewPicoClientChannel(config.PicoClientConfig{
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
 		URL:         wsURL(srv.URL),
 		SessionID:   "sess-close",
 		ReadTimeout: 10,
@@ -261,4 +269,167 @@ func TestSend_ClosedConnection(t *testing.T) {
 	}
 
 	ch.Stop(ctx)
+}
+
+func TestParseInlineImageMedia_Valid(t *testing.T) {
+	media, err := parseInlineImageMedia(map[string]any{
+		"media": []any{
+			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII=",
+		},
+	})
+	if err != nil {
+		t.Fatalf("parseInlineImageMedia() error = %v", err)
+	}
+	if len(media) != 1 {
+		t.Fatalf("len(media) = %d, want 1", len(media))
+	}
+}
+
+func TestPicoChannel_HandleMessageSend_AllowsMediaOnly(t *testing.T) {
+	mb := bus.NewMessageBus()
+	bc := &config.Channel{Type: "pico", Enabled: true}
+	ch, err := NewPicoChannel(bc, &config.PicoSettings{
+		Token: *config.NewSecureString("test-token"),
+	}, mb)
+	if err != nil {
+		t.Fatalf("NewPicoChannel() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := ch.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer ch.Stop(ctx)
+
+	pc := &picoConn{id: "conn-1", sessionID: "sess-1"}
+	ch.handleMessageSend(pc, PicoMessage{
+		ID: "msg-1",
+		Payload: map[string]any{
+			"media": []any{
+				"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII=",
+			},
+		},
+	})
+
+	select {
+	case msg := <-mb.InboundChan():
+		if msg.Content != "" {
+			t.Fatalf("msg.Content = %q, want empty", msg.Content)
+		}
+		if len(msg.Media) != 1 || !strings.HasPrefix(msg.Media[0], "data:image/png;base64,") {
+			t.Fatalf("msg.Media = %#v, want inline image payload", msg.Media)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for inbound media message")
+	}
+}
+
+func TestIsThoughtPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload map[string]any
+		want    bool
+	}{
+		{
+			name:    "explicit thought kind",
+			payload: map[string]any{PayloadKeyKind: MessageKindThought},
+			want:    true,
+		},
+		{
+			name:    "thought kind ignores case and whitespace",
+			payload: map[string]any{PayloadKeyKind: "  ThOuGhT  "},
+			want:    true,
+		},
+		{
+			name:    "legacy thought bool remains supported for inbound compatibility",
+			payload: map[string]any{PayloadKeyThought: true},
+			want:    true,
+		},
+		{
+			name:    "legacy thought false",
+			payload: map[string]any{PayloadKeyThought: false},
+			want:    false,
+		},
+		{
+			name:    "tool calls kind",
+			payload: map[string]any{PayloadKeyKind: MessageKindToolCalls},
+			want:    false,
+		},
+		{
+			name:    "non-string kind ignored",
+			payload: map[string]any{PayloadKeyKind: true},
+			want:    false,
+		},
+		{
+			name:    "default normal",
+			payload: map[string]any{PayloadKeyContent: "hello"},
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isThoughtPayload(tt.payload); got != tt.want {
+				t.Fatalf("isThoughtPayload() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPicoClientChannel_HandleServerMessage_IgnoresThought(t *testing.T) {
+	mb := bus.NewMessageBus()
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
+		URL: "ws://localhost:8080/ws",
+	}, mb)
+	if err != nil {
+		t.Fatalf("NewPicoClientChannel() error = %v", err)
+	}
+
+	ch.ctx = context.Background()
+	pc := &picoConn{sessionID: "sess-thought"}
+
+	ch.handleServerMessage(pc, PicoMessage{
+		Type: TypeMessageCreate,
+		Payload: map[string]any{
+			PayloadKeyContent: "internal reasoning",
+			PayloadKeyKind:    MessageKindThought,
+		},
+	})
+
+	select {
+	case msg := <-mb.InboundChan():
+		t.Fatalf("expected no inbound publish for thought payload, got %+v", msg)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestPicoClientChannel_HandleServerMessage_IgnoresLegacyThoughtBool(t *testing.T) {
+	mb := bus.NewMessageBus()
+	bc := &config.Channel{Type: config.ChannelPicoClient, Enabled: true}
+	ch, err := NewPicoClientChannel(bc, &config.PicoClientSettings{
+		URL: "ws://localhost:8080/ws",
+	}, mb)
+	if err != nil {
+		t.Fatalf("NewPicoClientChannel() error = %v", err)
+	}
+
+	ch.ctx = context.Background()
+	pc := &picoConn{sessionID: "sess-thought-legacy"}
+
+	ch.handleServerMessage(pc, PicoMessage{
+		Type: TypeMessageCreate,
+		Payload: map[string]any{
+			PayloadKeyContent: "legacy internal reasoning",
+			PayloadKeyThought: true,
+		},
+	})
+
+	select {
+	case msg := <-mb.InboundChan():
+		t.Fatalf("expected no inbound publish for legacy thought payload, got %+v", msg)
+	case <-time.After(150 * time.Millisecond):
+	}
 }

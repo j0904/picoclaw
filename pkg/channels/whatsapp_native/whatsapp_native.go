@@ -52,7 +52,7 @@ const (
 // WhatsAppNativeChannel implements the WhatsApp channel using whatsmeow (in-process, no external bridge).
 type WhatsAppNativeChannel struct {
 	*channels.BaseChannel
-	config       config.WhatsAppConfig
+	config       *config.WhatsAppSettings
 	storePath    string
 	client       *whatsmeow.Client
 	container    *sqlstore.Container
@@ -69,12 +69,14 @@ type WhatsAppNativeChannel struct {
 }
 
 func NewWhatsAppNativeChannel(
-	cfg config.WhatsAppConfig,
+	bc *config.Channel,
+	name string,
+	cfg *config.WhatsAppSettings,
 	bus *bus.MessageBus,
 	storePath string,
 	hasConfigFile bool,
 ) (channels.Channel, error) {
-	base := channels.NewBaseChannel("whatsapp_native", cfg, bus, cfg.AllowFrom, channels.WithMaxMessageLength(65536))
+	base := channels.NewBaseChannel(name, cfg, bus, bc.AllowFrom, channels.WithMaxMessageLength(65536))
 	if storePath == "" {
 		storePath = "whatsapp"
 	}
@@ -392,7 +394,6 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if evt.Info.Chat.Server == types.GroupServer {
 		peerKind = "group"
 	}
-	peer := bus.Peer{Kind: peerKind, ID: chatID}
 	messageID := evt.Info.ID
 	sender := bus.SenderInfo{
 		Platform:    "whatsapp",
@@ -410,7 +411,17 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 		"WhatsApp message received",
 		map[string]any{"sender_id": senderID, "content_preview": utils.Truncate(content, 50)},
 	)
-	c.HandleMessage(c.runCtx, peer, messageID, senderID, chatID, content, mediaPaths, metadata, sender)
+
+	inboundCtx := bus.InboundContext{
+		Channel:   "whatsapp",
+		ChatID:    chatID,
+		SenderID:  senderID,
+		MessageID: messageID,
+		ChatType:  peerKind,
+		Raw:       metadata,
+	}
+
+	c.HandleInboundContext(c.runCtx, chatID, content, mediaPaths, inboundCtx, sender)
 }
 
 func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {

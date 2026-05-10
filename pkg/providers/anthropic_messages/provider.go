@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
@@ -41,24 +42,26 @@ type Provider struct {
 	apiKey     string
 	apiBase    string
 	httpClient *http.Client
+	userAgent  string
 }
 
 // NewProvider creates a new Anthropic Messages API provider.
-func NewProvider(apiKey, apiBase string) *Provider {
-	return NewProviderWithTimeout(apiKey, apiBase, 0)
+func NewProvider(apiKey, apiBase, userAgent string) *Provider {
+	return NewProviderWithTimeout(apiKey, apiBase, userAgent, 0)
 }
 
 // NewProviderWithTimeout creates a provider with custom request timeout.
-func NewProviderWithTimeout(apiKey, apiBase string, timeoutSeconds int) *Provider {
-	baseURL := normalizeBaseURL(apiBase)
+func NewProviderWithTimeout(apiKey, apiBase, userAgent string, timeoutSeconds int) *Provider {
+	baseURL := common.NormalizeBaseURL(apiBase, defaultBaseURL, true)
 	timeout := defaultRequestTimeout
 	if timeoutSeconds > 0 {
 		timeout = time.Duration(timeoutSeconds) * time.Second
 	}
 
 	return &Provider{
-		apiKey:  apiKey,
-		apiBase: baseURL,
+		apiKey:    apiKey,
+		apiBase:   baseURL,
+		userAgent: userAgent,
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -105,6 +108,9 @@ func (p *Provider) Chat(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", p.apiKey) //nolint:canonicalheader // Anthropic API requires exact header name
 	req.Header.Set("Anthropic-Version", defaultAPIVersion)
+	if p.userAgent != "" {
+		req.Header.Set("User-Agent", p.userAgent)
+	}
 
 	// Execute request
 	resp, err := p.httpClient.Do(req)
@@ -156,7 +162,7 @@ func buildRequestBody(
 	options map[string]any,
 ) (map[string]any, error) {
 	// max_tokens is required and guaranteed by agent loop
-	maxTokens, ok := asInt(options["max_tokens"])
+	maxTokens, ok := common.AsInt(options["max_tokens"])
 	if !ok {
 		return nil, fmt.Errorf("max_tokens is required in options")
 	}
@@ -168,7 +174,7 @@ func buildRequestBody(
 	}
 
 	// Set temperature from options
-	if temp, ok := asFloat(options["temperature"]); ok {
+	if temp, ok := common.AsFloat(options["temperature"]); ok {
 		result["temperature"] = temp
 	}
 
@@ -354,61 +360,6 @@ func parseResponseBody(body []byte) (*LLMResponse, error) {
 			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
 		},
 	}, nil
-}
-
-// normalizeBaseURL ensures the base URL is properly formatted.
-// It removes /v1 suffix if present (to avoid duplication) and always appends /v1.
-// This handles edge cases like "https://api.example.com/v1/proxy" correctly.
-func normalizeBaseURL(apiBase string) string {
-	base := strings.TrimSpace(apiBase)
-	if base == "" {
-		return defaultBaseURL
-	}
-
-	// Remove trailing slashes
-	base = strings.TrimRight(base, "/")
-
-	// Remove /v1 suffix if present (will be re-added)
-	// This prevents duplication for URLs like "https://api.example.com/v1/proxy"
-	if before, ok := strings.CutSuffix(base, "/v1"); ok {
-		base = before
-	}
-
-	// Ensure we don't have an empty string after cutting
-	if base == "" {
-		return defaultBaseURL
-	}
-
-	// Add /v1 suffix (required by Anthropic Messages API)
-	return base + "/v1"
-}
-
-// Helper functions for type conversion
-
-func asInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case float64:
-		return int(val), true
-	case int64:
-		return int(val), true
-	default:
-		return 0, false
-	}
-}
-
-func asFloat(v any) (float64, bool) {
-	switch val := v.(type) {
-	case float64:
-		return val, true
-	case int:
-		return float64(val), true
-	case int64:
-		return float64(val), true
-	default:
-		return 0, false
-	}
 }
 
 // Anthropic API response structures
