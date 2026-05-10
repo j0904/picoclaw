@@ -40,6 +40,7 @@ func NewWhatsAppChannel(
 		bc.AllowFrom,
 		channels.WithMaxMessageLength(65536),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),
+		channels.WithGroupTrigger(bc.GroupTrigger),
 	)
 
 	return &WhatsAppChannel{
@@ -252,10 +253,19 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 		MessageID: messageID,
 		Raw:       metadata,
 	}
-	if chatID == senderID {
-		inboundCtx.ChatType = "direct"
-	} else {
+	peerKind := "direct"
+	if chatID != senderID {
 		inboundCtx.ChatType = "group"
+		peerKind = "group"
+	}
+
+	// Apply group trigger filtering in group chats
+	if peerKind == "group" {
+		respond, strippedContent := c.ShouldRespondInGroup(false, content)
+		if !respond {
+			return
+		}
+		content = strippedContent
 	}
 
 	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)

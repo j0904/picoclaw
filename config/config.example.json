@@ -146,6 +146,10 @@
       "use_native": false,
       "session_store_path": "",
       "allow_from": [],
+      "group_trigger": {
+        "mention_only": true,
+        "prefixes": ["!ai"]
+      },
       "reasoning_channel_id": ""
     },
     "feishu": {

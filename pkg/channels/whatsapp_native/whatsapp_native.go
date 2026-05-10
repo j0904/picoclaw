@@ -76,7 +76,14 @@ func NewWhatsAppNativeChannel(
 	storePath string,
 	hasConfigFile bool,
 ) (channels.Channel, error) {
-	base := channels.NewBaseChannel(name, cfg, bus, bc.AllowFrom, channels.WithMaxMessageLength(65536))
+	base := channels.NewBaseChannel(
+		name,
+		cfg,
+		bus,
+		bc.AllowFrom,
+		channels.WithMaxMessageLength(65536),
+		channels.WithGroupTrigger(bc.GroupTrigger),
+	)
 	if storePath == "" {
 		storePath = "whatsapp"
 	}
@@ -363,6 +370,10 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if evt.Message == nil {
 		return
 	}
+	// Skip messages sent by this bot itself
+	if evt.Info.IsFromMe {
+		return
+	}
 	senderID := evt.Info.Sender.String()
 	chatID := evt.Info.Chat.String()
 	content := evt.Message.GetConversation()
@@ -382,17 +393,14 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if evt.Info.PushName != "" {
 		metadata["user_name"] = evt.Info.PushName
 	}
+	peerKind := "direct"
 	if evt.Info.Chat.Server == types.GroupServer {
+		peerKind = "group"
 		metadata["peer_kind"] = "group"
 		metadata["peer_id"] = chatID
 	} else {
 		metadata["peer_kind"] = "direct"
 		metadata["peer_id"] = senderID
-	}
-
-	peerKind := "direct"
-	if evt.Info.Chat.Server == types.GroupServer {
-		peerKind = "group"
 	}
 	messageID := evt.Info.ID
 	sender := bus.SenderInfo{
@@ -404,6 +412,15 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 
 	if !c.IsAllowedSender(sender) {
 		return
+	}
+
+	// Apply group trigger filtering in group chats
+	if peerKind == "group" {
+		respond, strippedContent := c.ShouldRespondInGroup(false, content)
+		if !respond {
+			return
+		}
+		content = strippedContent
 	}
 
 	logger.DebugCF(
