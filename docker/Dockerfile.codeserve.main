@@ -1,0 +1,59 @@
+# ============================================================
+# Stage 1: Build picoclaw binary from main branch source
+# ============================================================
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git make
+
+WORKDIR /src
+RUN git clone https://github.com/j0904/picoclaw.git . && \
+    make build
+
+# ============================================================
+# Stage 2: code-server with integrated picoclaw agent
+# Both services run simultaneously via s6-overlay (linuxserver pattern)
+# ============================================================
+FROM linuxserver/code-server:latest
+
+# Install runtime dependencies (linuxserver/code-server is Ubuntu/Debian-based)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      git \
+      python3 \
+      python3-pip \
+      gh \
+      tmux \
+    && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install content summary tool (supports China mirror acceleration)
+RUN npm i -g @steipete/summarize
+
+# Install WeChat iLink plugin for weixin channel QR login support
+# The plugin expects 'openclaw' CLI — create a compatibility wrapper for picoclaw
+RUN printf '#!/bin/sh\ncase "$1" in\n  --version) echo "2026.3.22" ;;\n  plugins) shift; exec /usr/local/bin/picoclaw skills "$@" ;;\n  *) exec /usr/local/bin/picoclaw "$@" ;;\nesac\n' > /usr/local/bin/openclaw && \
+    chmod +x /usr/local/bin/openclaw && \
+    npm install -g @tencent-weixin/openclaw-weixin@latest
+
+# Install uv directly into /usr/local/bin (UV_INSTALL_DIR avoids $HOME ambiguity;
+# linuxserver/code-server sets $HOME=/config, not /root)
+RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh && \
+  uv --version
+
+# Copy the freshly-built picoclaw binary from the builder stage
+COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+RUN chmod +x /usr/local/bin/picoclaw
+
+# Register picoclaw as a custom s6-overlay service so it runs alongside code-server.
+# /custom-services.d/ is the linuxserver convention for co-process scripts.
+RUN mkdir -p /custom-services.d && \
+    printf '#!/usr/bin/with-contenv sh\nexec /usr/local/bin/picoclaw gateway\n' \
+      > /custom-services.d/picoclaw && \
+    chmod +x /custom-services.d/picoclaw
+
+# Expose picoclaw gateway port alongside the default code-server port (8443)
+EXPOSE 18790 18800
+
+# Keep the default linuxserver/code-server ENTRYPOINT and CMD so code-server starts normally.
