@@ -414,14 +414,12 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 		return
 	}
 
-	// Apply group trigger filtering in group chats
-	if peerKind == "group" {
-		respond, strippedContent := c.ShouldRespondInGroup(false, content)
-		if !respond {
-			return
-		}
-		content = strippedContent
+	// Apply trigger filtering: respond only when mentioned or prefixed
+	respond, strippedContent := c.ShouldRespondInGroup(false, content)
+	if !respond {
+		return
 	}
+	content = strippedContent
 
 	logger.DebugCF(
 		"whatsapp",

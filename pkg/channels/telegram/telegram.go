@@ -829,19 +829,19 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		content = "[media only]"
 	}
 
-	// In group chats, apply unified group trigger filtering
+	// Apply unified trigger filtering for all chats
 	isMentioned := false
 	if message.Chat.Type != "private" {
 		isMentioned = c.isBotMentioned(message)
 		if isMentioned {
 			content = c.stripBotMention(content)
 		}
-		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
-		if !respond {
-			return nil
-		}
-		content = cleaned
 	}
+	respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
+	if !respond {
+		return nil
+	}
+	content = cleaned
 
 	if message.ReplyToMessage != nil {
 		quotedMedia := quotedTelegramMediaRefs(

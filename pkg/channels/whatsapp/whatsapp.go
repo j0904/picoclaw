@@ -259,14 +259,12 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 		peerKind = "group"
 	}
 
-	// Apply group trigger filtering in group chats
-	if peerKind == "group" {
-		respond, strippedContent := c.ShouldRespondInGroup(false, content)
-		if !respond {
-			return
-		}
-		content = strippedContent
+	// Apply unified trigger filtering for all chats
+	respond, strippedContent := c.ShouldRespondInGroup(false, content)
+	if !respond {
+		return
 	}
+	content = strippedContent
 
 	c.HandleInboundContext(c.ctx, chatID, content, mediaPaths, inboundCtx, sender)
 }
