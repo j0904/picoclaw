@@ -155,14 +155,14 @@ func (p *ClaudeCliProvider) parseClaudeCliResponse(output string) (*LLMResponse,
 	}, nil
 }
 
-// extractToolCalls delegates to the shared extractToolCallsFromText function.
+// extractToolCalls delegates to the shared ExtractToolCallsFromText function.
 func (p *ClaudeCliProvider) extractToolCalls(text string) []ToolCall {
-	return extractToolCallsFromText(text)
+	return ExtractToolCallsFromText(text)
 }
 
-// stripToolCallsJSON delegates to the shared stripToolCallsFromText function.
+// stripToolCallsJSON delegates to the shared StripToolCallsFromText function.
 func (p *ClaudeCliProvider) stripToolCallsJSON(text string) string {
-	return stripToolCallsFromText(text)
+	return StripToolCallsFromText(text)
 }
 
 // findMatchingBrace finds the index after the closing brace matching the opening brace at pos.

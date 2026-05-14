@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-// extractToolCallsFromText parses tool call JSON from response text.
+// ExtractToolCallsFromText parses tool call JSON from response text.
 // Both ClaudeCliProvider and CodexCliProvider use this to extract
 // tool calls that the model outputs in its response text.
-func extractToolCallsFromText(text string) []ToolCall {
+func ExtractToolCallsFromText(text string) []ToolCall {
 	start := strings.Index(text, `{"tool_calls"`)
 	if start == -1 {
 		return nil
@@ -56,8 +56,8 @@ func extractToolCallsFromText(text string) []ToolCall {
 	return result
 }
 
-// stripToolCallsFromText removes tool call JSON from response text.
-func stripToolCallsFromText(text string) string {
+// StripToolCallsFromText removes tool call JSON from response text.
+func StripToolCallsFromText(text string) string {
 	start := strings.Index(text, `{"tool_calls"`)
 	if start == -1 {
 		return text

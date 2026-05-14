@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/providers/cli"
 )
 
 // qwenACPEnvelope is a single NDJSON line exchanged over the
@@ -153,11 +155,11 @@ func (p *QwenACPProvider) ChatWithStream(
 		return nil, err
 	}
 
-	toolCalls := extractToolCallsFromText(content)
+	toolCalls := cliprovider.ExtractToolCallsFromText(content)
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
-		content = stripToolCallsFromText(content)
+		content = cliprovider.StripToolCallsFromText(content)
 	}
 
 	return &LLMResponse{
