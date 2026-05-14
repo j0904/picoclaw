@@ -7,6 +7,13 @@ on:
         description: "Release tag"
         required: true
         type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git ref to build (tag, branch, or commit SHA)"
+        required: true
+        type: string
+        default: main
 
 env:
   GHCR_REGISTRY: ghcr.io
