@@ -3,11 +3,11 @@
 # ============================================================
 FROM golang:1.25-alpine AS builder
 
-RUN apk add --no-cache git make
+RUN apk add --no-cache git
 
 WORKDIR /src
 RUN git clone https://github.com/j0904/picoclaw.git . && \
-    make build
+    CGO_ENABLED=0 go build -v -ldflags="-s -w" -o /src/build/picoclaw ./cmd/picoclaw
 
 # ============================================================
 # Stage 2: code-server with integrated picoclaw agent
