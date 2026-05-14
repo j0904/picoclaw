@@ -1,6 +1,7 @@
 package whatsapp
 
 import (
+	"os"
 	"path/filepath"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -25,7 +26,8 @@ func init() {
 			if storePath == "" {
 				storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp")
 			}
-			ch, err := NewWhatsAppNativeChannel(bc, channelName, c, b, storePath)
+			_, hasConfigFile := os.Stat(filepath.Join(storePath, "config.json"))
+			ch, err := NewWhatsAppNativeChannel(bc, channelName, c, b, storePath, hasConfigFile == nil)
 			if err != nil {
 				return nil, err
 			}

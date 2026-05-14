@@ -253,10 +253,8 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 		MessageID: messageID,
 		Raw:       metadata,
 	}
-	peerKind := "direct"
 	if chatID != senderID {
 		inboundCtx.ChatType = "group"
-		peerKind = "group"
 	}
 
 	// Apply unified trigger filtering for all chats
