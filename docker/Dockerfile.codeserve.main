@@ -8,7 +8,7 @@ RUN apk add --no-cache git
 WORKDIR /src
 RUN git clone https://github.com/j0904/picoclaw.git . && \
     go generate ./cmd/picoclaw/internal/onboard/ && \
-    CGO_ENABLED=0 go build -v -tags goolm,stdjson -ldflags="-s -w" -o /src/build/picoclaw ./cmd/picoclaw
+    CGO_ENABLED=0 go build -v -tags "goolm,stdjson,whatsapp_native" -ldflags="-s -w" -o /src/build/picoclaw ./cmd/picoclaw
 
 # ============================================================
 # Stage 2: code-server with integrated picoclaw agent

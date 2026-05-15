@@ -139,6 +139,14 @@ func TestShouldRespondInGroup(t *testing.T) {
 			wantContent: "hello",
 		},
 		{
+			name:        "mention_only with prefixes - prefix match in dm (not mentioned)",
+			gt:          config.GroupTriggerConfig{MentionOnly: true, Prefixes: []string{"!ai"}},
+			isMentioned: false,
+			content:     "!ai hello",
+			wantRespond: true,
+			wantContent: "hello",
+		},
+		{
 			name:        "mention_only with prefixes - not mentioned, no prefix",
 			gt:          config.GroupTriggerConfig{MentionOnly: true, Prefixes: []string{"/ask"}},
 			isMentioned: false,

@@ -151,9 +151,9 @@ func (c *BaseChannel) MaxMessageLength() int {
 //
 // Logic:
 //   - If isMentioned → always respond
-//   - If mention_only configured and not mentioned → ignore
 //   - If prefixes configured → respond if content starts with any prefix (strip it)
 //   - If prefixes configured but no match and not mentioned → ignore
+//   - If mention_only configured and not mentioned → ignore
 //   - Otherwise (no group_trigger configured) → respond to all (permissive default)
 func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bool, string) {
 	gt := c.groupTrigger
@@ -163,12 +163,9 @@ func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bo
 		return true, strings.TrimSpace(content)
 	}
 
-	// mention_only → require mention
-	if gt.MentionOnly {
-		return false, content
-	}
-
-	// Prefix matching
+	// Prefix matching — check BEFORE mention_only so that
+	// `mention_only: true` + `prefixes: ["!ai"]` works in DMs
+	// (where isMentioned is always false) and in group chats.
 	if len(gt.Prefixes) > 0 {
 		for _, prefix := range gt.Prefixes {
 			if prefix != "" && strings.HasPrefix(content, prefix) {
@@ -176,6 +173,11 @@ func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bo
 			}
 		}
 		// Prefixes configured but none matched and not mentioned → ignore
+		return false, content
+	}
+
+	// mention_only → require mention (no prefixes to fall back on)
+	if gt.MentionOnly {
 		return false, content
 	}
 
