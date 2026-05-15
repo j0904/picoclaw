@@ -66,6 +66,8 @@ type WhatsAppNativeChannel struct {
 	hasConfigFile bool       // true if config.json exists (QR code only generated if true)
 	lastQRTime   time.Time   // track last QR code generation time
 	qrMu         sync.Mutex  // protect lastQRTime
+	sentIDs      map[string]struct{} // track sent message IDs to distinguish echoes from user msgs
+	sentIDsMu    sync.Mutex
 }
 
 func NewWhatsAppNativeChannel(
@@ -93,6 +95,7 @@ func NewWhatsAppNativeChannel(
 		storePath:      storePath,
 		hasConfigFile:  hasConfigFile,
 		lastQRTime:     time.Now(), // Initialize to now so rate limiter works from first QR
+		sentIDs:        make(map[string]struct{}),
 	}
 	return c, nil
 }
@@ -370,9 +373,21 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	if evt.Message == nil {
 		return
 	}
-	// Skip messages sent by this bot itself
+	// Skip messages echoed back by WhatsApp after we sent them.
+	// In WhatsApp multi-device, ALL messages from linked devices (including the
+	// user's phone) have IsFromMe=true, so we track sentIDs to distinguish echoes.
 	if evt.Info.IsFromMe {
-		return
+		if evt.Info.ID != "" {
+			c.sentIDsMu.Lock()
+			_, isEcho := c.sentIDs[evt.Info.ID]
+			delete(c.sentIDs, evt.Info.ID)
+			c.sentIDsMu.Unlock()
+			if isEcho {
+				return
+			}
+		}
+		// If no ID or not tracked: this is a message from the user's phone
+		// (another linked device), process it normally.
 	}
 	senderID := evt.Info.Sender.String()
 	chatID := evt.Info.Chat.String()
@@ -472,8 +487,22 @@ func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessag
 		Conversation: proto.String(msg.Content),
 	}
 
-	if _, err = client.SendMessage(ctx, to, waMsg); err != nil {
+	resp, err := client.SendMessage(ctx, to, waMsg)
+	if err != nil {
 		return nil, fmt.Errorf("whatsapp send: %w", channels.ErrTemporary)
+	}
+	// Track the sent message ID so we can filter the echo
+	if resp.ID != "" {
+		c.sentIDsMu.Lock()
+		c.sentIDs[resp.ID] = struct{}{}
+		// Cap the map to prevent unbounded growth
+		if len(c.sentIDs) > 1000 {
+			for id := range c.sentIDs {
+				delete(c.sentIDs, id)
+				break
+			}
+		}
+		c.sentIDsMu.Unlock()
 	}
 	return nil, nil
 }
