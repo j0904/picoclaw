@@ -76,6 +76,8 @@ jobs:
         run: |
           IMG_TAG='${{ inputs.image_tag }}'
           [ -z "$IMG_TAG" ] && IMG_TAG='${{ inputs.tag }}'
+          # Fallback for push events where inputs.tag is empty
+          [ -z "$IMG_TAG" ] && IMG_TAG='${{ github.ref_name }}'
           {
             echo 'tags<<TAGS_EOF'
             echo '${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:'"$IMG_TAG"
