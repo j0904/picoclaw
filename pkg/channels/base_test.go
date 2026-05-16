@@ -66,6 +66,7 @@ func TestShouldRespondInGroup(t *testing.T) {
 		wantRespond bool
 		wantContent string
 	}{
+		// ── Default (no group_trigger) ──
 		{
 			name:        "no config - permissive default",
 			gt:          config.GroupTriggerConfig{},
@@ -82,6 +83,8 @@ func TestShouldRespondInGroup(t *testing.T) {
 			wantRespond: true,
 			wantContent: "hello world",
 		},
+
+		// ── Legacy: mention_only ──
 		{
 			name:        "mention_only - not mentioned",
 			gt:          config.GroupTriggerConfig{MentionOnly: true},
@@ -98,6 +101,8 @@ func TestShouldRespondInGroup(t *testing.T) {
 			wantRespond: true,
 			wantContent: "hello world",
 		},
+
+		// ── Legacy: prefixes ──
 		{
 			name:        "prefix match",
 			gt:          config.GroupTriggerConfig{Prefixes: []string{"/ask"}},
@@ -131,30 +136,6 @@ func TestShouldRespondInGroup(t *testing.T) {
 			wantContent: "help me",
 		},
 		{
-			name:        "mention_only with prefixes - mentioned overrides",
-			gt:          config.GroupTriggerConfig{MentionOnly: true, Prefixes: []string{"/ask"}},
-			isMentioned: true,
-			content:     "hello",
-			wantRespond: true,
-			wantContent: "hello",
-		},
-		{
-			name:        "mention_only with prefixes - prefix match in dm (not mentioned)",
-			gt:          config.GroupTriggerConfig{MentionOnly: true, Prefixes: []string{"!ai"}},
-			isMentioned: false,
-			content:     "!ai hello",
-			wantRespond: true,
-			wantContent: "hello",
-		},
-		{
-			name:        "mention_only with prefixes - not mentioned, no prefix",
-			gt:          config.GroupTriggerConfig{MentionOnly: true, Prefixes: []string{"/ask"}},
-			isMentioned: false,
-			content:     "hello",
-			wantRespond: false,
-			wantContent: "hello",
-		},
-		{
 			name:        "empty prefix in list is skipped",
 			gt:          config.GroupTriggerConfig{Prefixes: []string{"", "/ask"}},
 			isMentioned: false,
@@ -169,6 +150,90 @@ func TestShouldRespondInGroup(t *testing.T) {
 			content:     "/ask hello",
 			wantRespond: true,
 			wantContent: "hello",
+		},
+
+		// ── New: keywords + match_mode (contains) ──
+		{
+			name:        "keywords contains - matches",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"ai", "@ai"}, MatchMode: "contains"},
+			isMentioned: false,
+			content:     "tell me ai something",
+			wantRespond: true,
+			wantContent: "tell me ai something",
+		},
+		{
+			name:        "keywords contains - no match",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"ai", "@ai"}, MatchMode: "contains"},
+			isMentioned: false,
+			content:     "hello world",
+			wantRespond: false,
+			wantContent: "hello world",
+		},
+		{
+			name:        "keywords contains - mentioned still works",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"ai"}, MatchMode: "contains"},
+			isMentioned: true,
+			content:     "hello world",
+			wantRespond: true,
+			wantContent: "hello world",
+		},
+		{
+			name:        "keywords contains - default match_mode is contains",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"ai"}},
+			isMentioned: false,
+			content:     "using ai here",
+			wantRespond: true,
+			wantContent: "using ai here",
+		},
+		{
+			name:        "keywords contains - keyword at end",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"ai"}, MatchMode: "contains"},
+			isMentioned: false,
+			content:     "let's use ai",
+			wantRespond: true,
+			wantContent: "let's use ai",
+		},
+		{
+			name:        "keywords contains - multiple keywords, second matches",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"!ai", "@ai"}, MatchMode: "contains"},
+			isMentioned: false,
+			content:     "hey @ai help me",
+			wantRespond: true,
+			wantContent: "hey @ai help me",
+		},
+		{
+			name:        "keywords contains - empty keyword skipped",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"", "ai"}, MatchMode: "contains"},
+			isMentioned: false,
+			content:     "use ai",
+			wantRespond: true,
+			wantContent: "use ai",
+		},
+
+		// ── New: keywords + match_mode (prefix) ──
+		{
+			name:        "keywords prefix - matches and strips",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"!ai", "@ai"}, MatchMode: "prefix"},
+			isMentioned: false,
+			content:     "!ai hello world",
+			wantRespond: true,
+			wantContent: "hello world",
+		},
+		{
+			name:        "keywords prefix - no match",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"!ai"}, MatchMode: "prefix"},
+			isMentioned: false,
+			content:     "hello !ai world",
+			wantRespond: false,
+			wantContent: "hello !ai world",
+		},
+		{
+			name:        "keywords prefix - second keyword matches and strips",
+			gt:          config.GroupTriggerConfig{Keywords: []string{"!ask", "@bot"}, MatchMode: "prefix"},
+			isMentioned: false,
+			content:     "@bot do something",
+			wantRespond: true,
+			wantContent: "do something",
 		},
 	}
 

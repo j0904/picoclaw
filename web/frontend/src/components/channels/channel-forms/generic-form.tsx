@@ -13,6 +13,13 @@ import {
   getSecretInputPlaceholder,
   isSecretField,
 } from "@/components/channels/channel-config-fields"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Field, KeyInput, SwitchCardField } from "@/components/shared-form"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -344,20 +351,43 @@ export function GenericForm({
                   </div>
 
                   <ChannelArrayListField
-                    label={t("channels.field.groupTriggerPrefixes")}
-                    hint={t("channels.form.desc.groupTriggerPrefixes")}
-                    value={asStringArray(groupTriggerConfig.prefixes)}
+                    label={t("channels.field.groupTriggerKeywords")}
+                    hint={t("channels.form.desc.groupTriggerKeywords")}
+                    value={asStringArray(groupTriggerConfig.keywords)}
                     onChange={(value) =>
                       onChange("group_trigger", {
                         ...groupTriggerConfig,
-                        prefixes: value,
+                        keywords: value,
                       })
                     }
-                    placeholder={t("channels.field.groupTriggerPrefixes")}
-                    fieldPath="group_trigger.prefixes"
+                    placeholder={t("channels.field.groupTriggerKeywordsPlaceholder")}
+                    fieldPath="group_trigger.keywords"
                     registerFlusher={registerArrayFieldFlusher}
                     resetVersion={arrayFieldResetVersion}
                   />
+
+                  <Field
+                    label={t("channels.field.groupTriggerMatchMode")}
+                    hint={t("channels.form.desc.groupTriggerMatchMode")}
+                  >
+                    <Select
+                      value={asString(groupTriggerConfig.match_mode) || "contains"}
+                      onValueChange={(val) =>
+                        onChange("group_trigger", {
+                          ...groupTriggerConfig,
+                          match_mode: val,
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="contains">contains</SelectItem>
+                        <SelectItem value="prefix">prefix</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
                 </>
               )}
 

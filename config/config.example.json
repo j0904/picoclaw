@@ -102,7 +102,7 @@
       "model": "qwen-cli/qwen-max",
       "api_base": "/usr/local/bin/qwen",
       "workspace": "~/.picoclaw/workspace"
-    }
+    }],
   "channels": {
     "telegram": {
       "enabled": false,
@@ -122,7 +122,8 @@
       "proxy": "",
       "allow_from": [],
       "group_trigger": {
-        "mention_only": false
+        "keywords": ["ai", "@ai", "!ai"],
+        "match_mode": "contains"
       },
       "reasoning_channel_id": ""
     },
@@ -147,8 +148,8 @@
       "session_store_path": "",
       "allow_from": [],
       "group_trigger": {
-        "mention_only": true,
-        "prefixes": ["!ai"]
+        "keywords": ["!ai"],
+        "match_mode": "prefix"
       },
       "reasoning_channel_id": ""
     },
@@ -190,7 +191,8 @@
       "join_on_invite": true,
       "allow_from": [],
       "group_trigger": {
-        "mention_only": true
+        "keywords": ["@your-bot"],
+        "match_mode": "contains"
       },
       "placeholder": {
         "enabled": true,
@@ -269,7 +271,8 @@
       "request_caps": ["server-time", "message-tags"],
       "allow_from": [],
       "group_trigger": {
-        "mention_only": true
+        "keywords": ["mybot"],
+        "match_mode": "contains"
       },
       "typing": {
         "enabled": false

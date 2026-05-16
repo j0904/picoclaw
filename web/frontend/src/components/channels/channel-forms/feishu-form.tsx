@@ -149,18 +149,34 @@ export function FeishuForm({
 
       <Card className="py-3 shadow-sm">
         <CardContent className="divide-border/60 divide-y px-6 py-0 [&>div]:py-5">
+          <ChannelArrayListField
+            label={t("channels.field.groupTriggerKeywords")}
+            hint={t("channels.form.desc.groupTriggerKeywords")}
+            value={asStringArray(groupTriggerConfig.keywords)}
+            onChange={(value) =>
+              onChange("group_trigger", {
+                ...groupTriggerConfig,
+                keywords: value,
+              })
+            }
+            placeholder={t("channels.field.groupTriggerKeywordsPlaceholder")}
+            fieldPath="group_trigger.keywords"
+            registerFlusher={registerArrayFieldFlusher}
+            resetVersion={arrayFieldResetVersion}
+          />
+
           <div>
             <SwitchCardField
-              label={t("channels.field.groupTriggerMentionOnly")}
-              hint={t("channels.form.desc.groupTriggerMentionOnly")}
-              checked={asBool(groupTriggerConfig.mention_only)}
+              label={t("channels.field.groupTriggerMatchMode")}
+              hint={t("channels.form.desc.groupTriggerMatchMode")}
+              checked={groupTriggerConfig.match_mode === "prefix"}
               onCheckedChange={(checked) => {
                 onChange("group_trigger", {
                   ...groupTriggerConfig,
-                  mention_only: checked,
+                  match_mode: checked ? "prefix" : "contains",
                 })
               }}
-              ariaLabel={t("channels.field.groupTriggerMentionOnly")}
+              ariaLabel={t("channels.field.groupTriggerMatchMode")}
             />
           </div>
 

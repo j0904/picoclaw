@@ -100,18 +100,34 @@ export function DiscordForm({
             resetVersion={arrayFieldResetVersion}
           />
 
+          <ChannelArrayListField
+            label={t("channels.field.groupTriggerKeywords")}
+            hint={t("channels.form.desc.groupTriggerKeywords")}
+            value={asStringArray(groupTriggerConfig.keywords)}
+            onChange={(value) =>
+              onChange("group_trigger", {
+                ...groupTriggerConfig,
+                keywords: value,
+              })
+            }
+            placeholder={t("channels.field.groupTriggerKeywordsPlaceholder")}
+            fieldPath="group_trigger.keywords"
+            registerFlusher={registerArrayFieldFlusher}
+            resetVersion={arrayFieldResetVersion}
+          />
+
           <div>
             <SwitchCardField
-              label={t("channels.field.mentionOnly")}
-              hint={t("channels.form.desc.mentionOnly")}
-              checked={asBool(groupTriggerConfig.mention_only)}
+              label={t("channels.field.groupTriggerMatchMode")}
+              hint={t("channels.form.desc.groupTriggerMatchMode")}
+              checked={groupTriggerConfig.match_mode === "prefix"}
               onCheckedChange={(checked) => {
                 onChange("group_trigger", {
                   ...groupTriggerConfig,
-                  mention_only: checked,
+                  match_mode: checked ? "prefix" : "contains",
                 })
               }}
-              ariaLabel={t("channels.field.mentionOnly")}
+              ariaLabel={t("channels.field.groupTriggerMatchMode")}
             />
           </div>
         </CardContent>

@@ -89,7 +89,7 @@ function serializeGroupTriggerForSubmit(value: unknown): unknown {
   }
   return {
     ...groupTrigger,
-    prefixes: serializeStringArrayForSubmit(groupTrigger.prefixes),
+    keywords: serializeStringArrayForSubmit(groupTrigger.keywords),
   }
 }
 

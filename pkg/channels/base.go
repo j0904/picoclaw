@@ -151,9 +151,9 @@ func (c *BaseChannel) MaxMessageLength() int {
 //
 // Logic:
 //   - If isMentioned → always respond
-//   - If prefixes configured → respond if content starts with any prefix (strip it)
-//   - If prefixes configured but no match and not mentioned → ignore
-//   - If mention_only configured and not mentioned → ignore
+//   - If keywords configured → respond if content matches any keyword per match_mode
+//   - If prefixes configured (legacy) → respond if content starts with any prefix (strip it)
+//   - If mention_only configured (legacy) and not mentioned → ignore
 //   - Otherwise (no group_trigger configured) → respond to all (permissive default)
 func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bool, string) {
 	gt := c.groupTrigger
@@ -163,7 +163,34 @@ func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bo
 		return true, strings.TrimSpace(content)
 	}
 
-	// Prefix matching — check BEFORE mention_only so that
+	// Keywords with match_mode — the recommended way.
+	// match_mode "contains" (default): respond if any keyword appears anywhere.
+	// match_mode "prefix": respond if content starts with any keyword (strip it).
+	if len(gt.Keywords) > 0 {
+		matchMode := gt.MatchMode
+		if matchMode == "" {
+			matchMode = "contains"
+		}
+		for _, kw := range gt.Keywords {
+			if kw == "" {
+				continue
+			}
+			switch matchMode {
+			case "prefix":
+				if strings.HasPrefix(content, kw) {
+					return true, strings.TrimSpace(strings.TrimPrefix(content, kw))
+				}
+			default: // "contains"
+				if strings.Contains(content, kw) {
+					return true, strings.TrimSpace(content)
+				}
+			}
+		}
+		// Keywords configured but none matched and not mentioned → ignore
+		return false, content
+	}
+
+	// Legacy: Prefix matching — check BEFORE mention_only so that
 	// `mention_only: true` + `prefixes: ["!ai"]` works in DMs
 	// (where isMentioned is always false) and in group chats.
 	if len(gt.Prefixes) > 0 {
@@ -176,7 +203,7 @@ func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bo
 		return false, content
 	}
 
-	// mention_only → require mention (no prefixes to fall back on)
+	// Legacy: mention_only → require mention (no prefixes to fall back on)
 	if gt.MentionOnly {
 		return false, content
 	}

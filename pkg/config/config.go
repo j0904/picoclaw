@@ -318,9 +318,24 @@ func (d *AgentDefaults) GetModelName() string {
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
+//
+// Keywords with match_mode is the recommended way:
+//
+//	"group_trigger": {
+//	  "keywords": ["ai", "@ai", "!ai"],
+//	  "match_mode": "contains"
+//	}
+//
+// match_mode values:
+//   - "contains" (default): respond if any keyword appears anywhere in the message
+//   - "prefix": respond if the message starts with any keyword (keyword is stripped from content)
+//
+// Legacy fields MentionOnly and Prefixes are still supported for backward compatibility.
 type GroupTriggerConfig struct {
 	MentionOnly bool     `json:"mention_only,omitempty"`
 	Prefixes    []string `json:"prefixes,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
+	MatchMode   string   `json:"match_mode,omitempty"` // "contains" (default) or "prefix"
 }
 
 // TypingConfig controls typing indicator behavior (Phase 10).

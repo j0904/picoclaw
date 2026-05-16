@@ -116,7 +116,8 @@
       "proxy": "",
       "allow_from": [],
       "group_trigger": {
-        "mention_only": false
+        "keywords": ["ai", "@ai", "!ai"],
+        "match_mode": "contains"
       },
       "reasoning_channel_id": ""
     },
@@ -176,7 +177,8 @@
       "join_on_invite": true,
       "allow_from": [],
       "group_trigger": {
-        "mention_only": true
+        "keywords": ["@your-bot"],
+        "match_mode": "contains"
       },
       "placeholder": {
         "enabled": true,
@@ -276,7 +278,8 @@
       ],
       "allow_from": [],
       "group_trigger": {
-        "mention_only": true
+        "keywords": ["mybot"],
+        "match_mode": "contains"
       },
       "typing": {
         "enabled": false
